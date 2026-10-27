@@ -59,7 +59,45 @@ parse_product_sales → build_brief → search_candidates → score_candidates �
 
 ---
 
+## Web 工作台（推荐给运营用）
+
+```bash
+python web/server.py
+# 浏览器打开 http://127.0.0.1:8765
+```
+
+不出意外的话，这是运营同事唯一需要的命令。
+
+**界面分三块**
+
+| 区域 | 内容 | 解决什么 |
+|---|---|---|
+| 左侧栏 | 5 个常用指令 + 预算输入 + 规划器切换 | 不用记命令行参数，点一下就跑 |
+| 驾驶舱 | 待处理告警（P0/P1）、整体 ROI、最优内容类型、客单价与置信度 | 一屏看完今天要不要动手 |
+| 结果区 | 入选名单表（可导出 CSV）、告警表、漏斗诊断、复写前后对比、执行轨迹 | 结论直接可执行，不用再翻报告 |
+
+**为「少点几下」做的几个细节**
+
+- 名单每行一个 `Brief` 按钮，点一下把合作 brief 复制到剪贴板，直接发给达人
+- 名单可一键导出 CSV，字段对齐投放表
+- 告警按 P0/P1 排序，每条都带「查什么」，不是只报数字
+- 客单价置信度低时，卡片上直接标注「不用于硬筛选」——避免有人拿 23.3 元去定价格带
+- 执行轨迹默认折叠在底部，需要核对数字时再展开
+
+**技术形态**：纯静态文件 + 标准库 `http.server`，零前端构建、零依赖。接口只有四个：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/overview` | 驾驶舱数据（销售结构 / 告警 / 复盘） |
+| POST | `/api/run` | 跑一次 agent，返回 trace 与结构化结果 |
+| GET | `/api/brief?ids=` | 生成合作 brief（Markdown，可直接发人） |
+| GET | `/api/export` | 导出上次名单 CSV |
+
+---
+
 ## 快速开始
+
+### 命令行（批处理 / 定时任务用）
 
 ```bash
 git clone https://github.com/Fenn12/kol-selection-agent.git
@@ -149,6 +187,9 @@ kol-selection-agent/
 │   ├── registry.py         # 12 个工具的 schema 与 handler
 │   ├── planner.py          # LLM 规划器 + 离线规则规划器
 │   └── runner.py           # 执行、护栏、trace
+├── web/                    # 本地 Web 工作台（零依赖）
+│   ├── server.py           # 4 个接口 + 静态文件服务
+│   └── static/             # index.html / style.css / app.js
 ├── data/                   # 全部合成：销售分布 / 候选池 / 投放数据 / 待复写样本
 ├── eval/                   # 9 条行为评测
 └── logs/                   # token 记账（gitignore）

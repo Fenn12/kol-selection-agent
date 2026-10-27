@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KOL 运营工作台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="brand"><b>KOL 运营台</b><span>OPS</span></div>
+    <div class="side-sub">选人 · 合作 · 复写 · 复盘 · 监测</div>
+
+    <div class="side-t">常 用 指 令</div>
+    <div class="presets" id="presets">
+      <button class="preset" data-goal="指压板新品起量，预算 8000">
+        <b>选人排期</b><i>按预算给出可投名单</i></button>
+      <button class="preset" data-goal="把这波投放复盘一下，找出最差的和最好的">
+        <b>投放复盘</b><i>ROI 与分组效率对比</i></button>
+      <button class="preset" data-goal="监测一下有没有异常，需要我处理的">
+        <b>异常监测</b><i>P0 / P1 告警与建议动作</i></button>
+      <button class="preset" data-goal="把这几条文案改写一版，注意合规">
+        <b>内容复写</b><i>合规清洗 + 平台适配</i></button>
+      <button class="preset" data-goal="全流程跑一遍：指压板新品起量，预算 8000">
+        <b>全流程</b><i>五类能力串跑</i></button>
+    </div>
+
+    <div class="side-t">参 数</div>
+    <div class="field">
+      <label for="budget">预算</label>
+      <input id="budget" type="number" value="8000" min="0" step="500">
+    </div>
+    <div class="radios">
+      <label><input type="radio" name="planner" value="auto" checked>
+        <span>自动 <small id="plannerHint">（按是否配置 key 决定）</small></span></label>
+      <label><input type="radio" name="planner" value="rule">
+        <span>离线规则 <small>（无需 key，稳定可复现）</small></span></label>
+      <label><input type="radio" name="planner" value="llm">
+        <span>大模型规划 <small id="llmState">（未检测到 key）</small></span></label>
+    </div>
+
+    <button class="run" id="runBtn">运行</button>
+    <div class="hint" id="hintText">选一个常用指令，或直接运行当前目标。<br>所有数字来自本地工具计算，不走模型。</div>
+  </aside>
+
+  <main class="main">
+    <div class="top">
+      <div>
+        <h1>今日运营驾驶舱</h1>
+        <p id="goalLine">指压板新品 —— 家清类目 · 数据为合成样例</p>
+      </div>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <div class="card-h">
+        <h2>今日待办</h2>
+        <div class="meta" id="todoMeta">按严重度排序</div>
+      </div>
+      <div class="card-b" id="todos"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="card-h"><h2>渠道结构</h2><div class="meta">近 28 天 · 销量占比</div></div>
+        <div class="card-b" id="channel"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>内容类型效率</h2><div class="meta">按 ROI 排序</div></div>
+        <div class="card-b" id="review"></div>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard">
+      <div class="card-h">
+        <h2>运行结果</h2>
+        <div class="meta" id="resultMeta">尚未运行</div>
+      </div>
+      <div class="card-b" id="result"><div class="empty">点左侧任意指令开始</div></div>
+    </div>
+
+    <div class="card" id="traceCard" style="display:none">
+      <div class="card-h"><h2>执行轨迹</h2><div class="meta">每步可核对，防止模型编数</div></div>
+      <div class="card-b"><div class="trace" id="trace"></div></div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
