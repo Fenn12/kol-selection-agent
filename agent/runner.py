@@ -22,7 +22,9 @@ def guard_block(tool, obs):
     if not isinstance(obs, dict):
         return None
     if any(k in obs for k in BLOCK_KEYS):
-        return f"工具 {tool} 报错：{obs.get('error')}，流程终止。"
+        hint = obs.get("suggestion") or obs.get("reason")
+        tail = f" 建议：{hint}" if hint else ""
+        return f"工具 {tool} 报错：{obs.get('error')}，流程终止。{tail}"
 
     if tool == "search_candidates" and obs.get("matched", 0) == 0:
         return ("候选池里没有符合条件的达人。不建议放宽标准硬凑名单——"
@@ -142,7 +144,7 @@ class Agent:
         elif tool == "compose_daily_report":
             c.report = obs
         elif tool == "diagnose_funnel":
-            if not obs.get("error"):
+            if not obs.get("error") and obs.get("found", True):
                 c.funnels.append(obs)
 
     def _save(self, rec):

@@ -163,9 +163,24 @@ REWRITE_SYSTEM = """你是消费品内容编辑，做「合规化改写」而不
 2. 开头两行必须落在具体场景或具体痛点，禁用「姐妹们」「谁懂啊」这类泛开场
 3. 卖点按「痛点 → 机制 → 体感」推进，不写参数表
 4. 结尾只能软引导，不出现购买指令
-5. 不同平台长度不同：小红书 300-500 字，抖音口播 80-150 字，视频号 120-200 字
+5. 正文长度必须落在平台区间内，低于下限视为不合格：小红书 300-500 字，抖音口播 80-150 字，视频号 120-200 字
+6. 不得出现违禁词原词，包括否定句和引用句（例如「不是疏通经络」也不行）；序数「第一次」改写为「头一次」或「刚开始」，避免命中绝对化词表
+7. 结尾只用「按需看看 / 有需要可以了解」这类软引导，不要出现「评论区放链接」「点击购买」「冲」
 
 输出 JSON：{"title": "...", "body": "...", "changes": ["改了什么，为什么"], "risk_flags": ["仍需人工确认的点"]}"""
+
+
+REPAIR_SYSTEM = """你是内容合规编辑。下面这段文案仍命中平台违禁词。
+请在不改变原意、不降低可读性的前提下重写，确保命中词的原词一个都不出现——
+否定句、引用句也不允许（「不是疏通经络」也会命中）；「第一次」改成「头一次」或「刚开始」。
+不要新增任何功效、疗效、绝对化表述，也不要新增购买指令。
+只输出 JSON：{"title": "...", "body": "...", "changes": ["改了什么"]}"""
+
+
+LENGTH_SYSTEM = """你是内容编辑。下面文案的长度不符合平台要求。
+请在保持事实、原意与平台调性的前提下调整正文长度到目标区间（中文按不含空格字符数计）。
+硬性要求：不新增疗效、医疗功效、绝对化用语或购买指令；不得出现违禁词原词（否定句也不行）。
+只输出 JSON：{"title": "...", "body": "...", "changes": ["长度怎么调的"]}"""
 
 
 def compliance_check(text):
@@ -203,31 +218,99 @@ def rewrite_content(sample_id=None, text=None, platform="小红书", product="�
     result = {"source_id": src["id"], "platform": platform,
               "before_compliance": before, "target_length": [lo, hi]}
 
+    # RAG：检索品牌语气 / 合规规则 / 平台要求，注入改写提示
+    rag_hits, rag_ctx = [], ""
+    try:
+        from . import rag as _rag
+        rag_hits, rag_ctx = _rag.search_context(
+            f"{platform} {product} 内容 合规 字数 品牌语气", top_k=3)
+        result["rag_hits"] = [{"doc": h["doc"], "title": h["title"], "score": h["score"]}
+                              for h in rag_hits]
+    except Exception:
+        pass
+
     if llm.available():
         try:
+            rag_block = (f"参考知识库（BM25 检索命中，按需引用，不要照抄）：\n{rag_ctx}\n\n"
+                         if rag_ctx else "")
             data = llm.chat_json([
                 {"role": "system", "content": REWRITE_SYSTEM},
-                {"role": "user", "content": f"平台：{platform}（{lo}-{hi}字）\n产品：{product}\n"
+                {"role": "user", "content": rag_block + f"平台：{platform}（{lo}-{hi}字）\n产品：{product}\n"
                                             f"原标题：{src.get('title', '')}\n原文：{src['body']}"}],
                 temperature=0.7, max_tokens=1200)
             body = data.get("body", "")
+            title = data.get("title", "")
+            changes = list(data.get("changes", []) or [])
             after = compliance_check(body)
-            result.update({"title": data.get("title", ""), "body": body,
-                           "changes": data.get("changes", []), "risk_flags": data.get("risk_flags", []),
-                           "after_compliance": after, "mode": "llm",
-                           "length": len(re.sub(r"\s", "", body))})
+            repaired = False
+
+            # 复写后仍命中 → 带着命中词让模型改一次（最多一次，避免死循环）
+            if not after["pass"]:
+                hit_words = sorted({h["word"] for h in after["hits"]})
+                try:
+                    fixed = llm.chat_json([
+                        {"role": "system", "content": REPAIR_SYSTEM},
+                        {"role": "user", "content":
+                            f"平台：{platform}\n命中词：{'、'.join(hit_words)}\n"
+                            f"标题：{title}\n正文：{body}"}],
+                        temperature=0.3, max_tokens=1200)
+                    body2 = fixed.get("body") or body
+                    after2 = compliance_check(body2)
+                    if after2["hit_count"] < after["hit_count"]:
+                        body, after = body2, after2
+                        title = fixed.get("title") or title
+                        changes += [f"合规修复：{c}" for c in (fixed.get("changes") or [])]
+                        repaired = True
+                except llm.LLMError:
+                    pass
+
+            length = len(re.sub(r"\s", "", body))
+            length_fixed = False
+            # 长度不在目标区间（低于下限或明显超上限）→ 再调一次
+            if length < lo or length > hi * 1.2:
+                try:
+                    fixed = llm.chat_json([
+                        {"role": "system", "content": LENGTH_SYSTEM},
+                        {"role": "user", "content":
+                            f"平台：{platform}\n目标长度：{lo}-{hi} 字（当前 {length} 字）\n"
+                            f"标题：{title}\n正文：{body}"}],
+                        temperature=0.5, max_tokens=1400)
+                    body2 = fixed.get("body") or body
+                    after2 = compliance_check(body2)
+                    n2 = len(re.sub(r"\s", "", body2))
+                    if after2["pass"] and lo * 0.95 <= n2 <= hi * 1.2:
+                        body, after, length = body2, after2, n2
+                        title = fixed.get("title") or title
+                        changes += [f"长度调整：{c}" for c in (fixed.get("changes") or [])]
+                        length_fixed = True
+                except llm.LLMError:
+                    pass
+
+            result.update({"title": title, "body": body, "changes": changes,
+                           "risk_flags": data.get("risk_flags", []),
+                           "after_compliance": after, "mode": "llm", "repaired": repaired,
+                           "length_fixed": length_fixed, "length": length})
             return result
         except llm.LLMError as e:
             result["llm_error"] = str(e)
 
-    # 离线降级：规则化改写，作用是把合规问题清掉，不追求文采
-    body = src["body"]
-    for words in BANNED.values():
-        for w in words:
-            body = body.replace(w, "")
-    body = re.sub(r"(姐妹们谁懂啊！?|谁懂啊！?)", "", body)
-    body = body.replace("链接放评论区了，冲！", "放在购物车里躺了几天，今天终于下单了。")
-    body = body.strip("，。！ ") + "。"
+    # 离线降级：规则化改写。按整句丢弃命中违禁词的句子，而不是做词级替换——
+    # 词级替换会把「而且还…，必备！了。冲。」这种残句留在正文里。
+    raw = re.sub(r"^(姐妹们谁懂啊[！!，,]*|谁懂啊[！!，,]*|家人们[！!，,]*|宝子们[！!，,]*)",
+                 "", src["body"]).strip()
+    parts = re.split(r"(?<=[。！!？?；;])\s*", raw)
+    banned_words = [w for words in BANNED.values() for w in words]
+    kept = [p.strip() for p in parts if p.strip() and not any(w in p for w in banned_words)]
+    body = "".join(kept).strip("，。！!；; ")
+    tail = {
+        "小红书": "放在书桌下面，想起来就踩一会儿，比一直瘫着强。",
+        "抖音": "放桌下，想起来踩两下就行。",
+        "视频号": "放在家里随手能踩到的地方，比刻意抽时间更容易坚持。",
+    }.get(platform, "放在随手能用到的地方，先试一周。")
+    if body and not body.endswith(("。", "！", "!", "？", "?")):
+        body += "。"
+    body = (body + tail) if body else tail
+    body = body.replace("。。", "。")
     after = compliance_check(body)
     result.update({"title": src.get("title", "") or f"{platform}改写版",
                    "body": body, "mode": "offline_rule",
@@ -278,7 +361,11 @@ def diagnose_funnel(kol_id):
     """漏斗定位：把变化拆到曝光 / 点击率 / 转化率 / 客单价四环，指出掉在哪。"""
     rows = [r for r in _read_csv("campaign_performance.csv") if r["kol_id"] == kol_id]
     if not rows:
-        return {"error": f"无 {kol_id} 的投放数据"}
+        # 这是「这个达人没有投放记录」的业务结果，不是工具故障。
+        # 返回 error 会命中 BLOCK 护栏，让整个任务因为一个辅助诊断而终止。
+        return {"kol_id": kol_id, "found": False,
+                "message": f"没有 {kol_id} 的投放记录，无法做漏斗诊断",
+                "suggestion": "换一个有投放记录的达人，或先看 monitor_scan 的告警名单"}
     rows.sort(key=lambda r: r["dt"])
     half = max(len(rows) // 2, 1)
     early, late = rows[:half], rows[half:]

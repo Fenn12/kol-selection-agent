@@ -316,7 +316,10 @@ def allocate_budget(scored_rows, budget, top_n=8):
     picked.sort(key=lambda r: (-r["total"], r["quote"]))
     remaining = budget - spent
     note = None
-    if remaining > budget * 0.3:
+    if len(picked) >= top_n and remaining > budget * 0.3:
+        note = (f"已选满 {top_n} 人上限，剩余 {remaining:.0f} 元（已用 {spent / budget:.0%}）。"
+                f"建议提高单人预算换 S/A 层，或扩池后再分配。")
+    elif remaining > budget * 0.3:
         note = (f"预算只用掉 {spent / budget:.0%}，剩余 {remaining:.0f} 元。"
                 f"原因：当前池子里 B 层以上且报价低的达人已被选完。"
                 f"建议放宽到更高粉丝量级，或提高单人预算换 S/A 层。")

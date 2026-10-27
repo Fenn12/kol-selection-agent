@@ -1,0 +1,130 @@
+{
+  "cases": 10,
+  "recall_at_3": 1.0,
+  "mrr": 0.95,
+  "hits": 10,
+  "rows": [
+    {
+      "query": "极限词有哪些",
+      "expected": [
+        "compliance_rules"
+      ],
+      "returned": [
+        "compliance_rules",
+        "content_playbook",
+        "content_playbook"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "第一次算不算绝对化用语",
+      "expected": [
+        "compliance_rules"
+      ],
+      "returned": [
+        "compliance_rules",
+        "brand_voice",
+        "brand_voice"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "小红书正文写多少字",
+      "expected": [
+        "content_playbook"
+      ],
+      "returned": [
+        "content_playbook",
+        "compliance_rules",
+        "content_playbook"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "抖音口播前 3 秒要出现什么",
+      "expected": [
+        "content_playbook"
+      ],
+      "returned": [
+        "compliance_rules",
+        "content_playbook",
+        "content_playbook"
+      ],
+      "rank": 2
+    },
+    {
+      "query": "四维评分的权重",
+      "expected": [
+        "kol_selection"
+      ],
+      "returned": [
+        "kol_selection",
+        "brand_voice",
+        "compliance_rules"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "S/A/B/C 分层标准",
+      "expected": [
+        "kol_selection"
+      ],
+      "returned": [
+        "kol_selection",
+        "kol_selection",
+        "case_notes"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "预算只用掉 7% 怎么办",
+      "expected": [
+        "case_notes",
+        "kol_selection"
+      ],
+      "returned": [
+        "case_notes",
+        "kol_selection",
+        "case_notes"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "K040 转化率骤降怎么查",
+      "expected": [
+        "case_notes"
+      ],
+      "returned": [
+        "case_notes",
+        "kol_selection",
+        "case_notes"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "品牌语气开头能写姐妹们吗",
+      "expected": [
+        "brand_voice"
+      ],
+      "returned": [
+        "brand_voice",
+        "content_playbook",
+        "compliance_rules"
+      ],
+      "rank": 1
+    },
+    {
+      "query": "客单价置信度低怎么处理",
+      "expected": [
+        "case_notes",
+        "kol_selection"
+      ],
+      "returned": [
+        "case_notes",
+        "kol_selection",
+        "case_notes"
+      ],
+      "rank": 1
+    }
+  ]
+}

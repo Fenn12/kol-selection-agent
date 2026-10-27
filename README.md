@@ -137,6 +137,26 @@ curl -X POST http://127.0.0.1:8765/api/pipeline \
 
 ---
 
+## MCP 与 RAG（可复现的工程证据）
+
+不是只写在技能栏：知识库检索与 MCP 协议都能离线跑。
+
+**RAG（BM25）**
+- 知识库 `data/knowledge/`：品牌语气、合规规则、四维评分、平台长度、历史案例
+- 中文单字 + 相邻双字分词，BM25 检索；复写前检索 top-3 注入提示词，结果回传 `rag_hits`
+- 10 条固定查询评测：**Recall@3 10/10，MRR 0.95**
+
+```bash
+python eval/rag_eval.py
+curl "http://127.0.0.1:8765/api/knowledge/search?q=极限词有哪些&k=3"
+```
+
+**MCP Server（stdio / JSON-RPC 2.0）**
+- `python mcp/server.py`，暴露 `search_knowledge` / `score_candidates` / `monitor_scan` 3 个工具
+- `python scripts/mcp_smoke.py` 真实拉起 server，走 `initialize → tools/list → tools/call × 3`，**3/3 通过**
+
+细节与完整 transcript：[docs/MCP_RAG.md](docs/MCP_RAG.md)
+
 ## Web 工作台（推荐给运营用）
 
 ```bash
@@ -144,40 +164,80 @@ python web/server.py
 # 浏览器打开 http://127.0.0.1:8765
 ```
 
-不出意外的话，这是运营同事唯一需要的命令。
+不出意外的话，这是运营同事唯一需要的命令。前端是**零构建的原生 ES Module**，不需要 npm，也不需要打包。
 
-**界面分三块**
+**十二个页面，对应 PRD 里的五类工作**
 
-| 区域 | 内容 | 解决什么 |
+| 页面 | 内容 | 对应场景 |
 |---|---|---|
-| 左侧栏 | 5 个常用指令 + 预算输入 + 规划器切换 | 不用记命令行参数，点一下就跑 |
-| 驾驶舱 | 待处理告警（P0/P1）、整体 ROI、最优内容类型、客单价与置信度 | 一屏看完今天要不要动手 |
-| 结果区 | 入选名单表（可导出 CSV）、告警表、漏斗诊断、复写前后对比、执行轨迹 | 结论直接可执行，不用再翻报告 |
+| 工作台 | 目标输入 + 推荐任务、5 个 KPI、投放趋势、今日告警、待处理任务、最近任务 | 日常入口 / S2 |
+| 线索入库 | 粘贴群消息 → 抽账号 → 补画像 → 评分分层 → 待发队列 | S1 |
+| 达人筛选与评分 | 四维评分表（D1–D4）、分层分布、预算分配、选中达人、合作方案与邀约话术 | S1 / S2 |
+| 达人分层 | S/A/B/C 分层表、平均分与报价合计、一键导出、单条邀约 | S1 / S2 |
+| 邀约管理 | 选 S/A 达人 → 生成话术 → 查看待发队列，逐条复制 | S1 |
+| 内容复写与合规 | 一稿三平台改写、原文/改写后对照、违规项前后对比 | S3 |
+| 合规检查 | 粘贴文案 → 确定性规则扫描，命中词、类别与建议 | S3 |
+| 内容库 | 样本列表、合规预检、预览与「去复写」 | S3 |
+| 投放策略 | 销售结构 → 主推渠道 / 达人配比 / 价格带 / 内容方向 | S2 |
+| 预算管理 | 预算测算、性价比入选名单、预算缺口与扩池提示 | S2 |
+| 数据监测 | P0/P1 告警、漏斗诊断、按内容类型复盘、30 天趋势 | S4 |
+| 日报中心 | Markdown 日报、复制/下载、dry-run 推送、历史记录 | S5 |
+| 系统设置 | AI 连接状态与测试、默认规划器、预算、数据源 | — |
 
-**为「少点几下」做的几个细节**
+> 达人页底部还内嵌了「Agent 执行过程」：Plan → Act → Observe → Reflect 四阶段、执行步骤、工具调用记录、实时思考与任务结果预览。
 
-- 名单每行一个 `Brief` 按钮，点一下把合作 brief 复制到剪贴板，直接发给达人
-- 名单可一键导出 CSV，字段对齐投放表
-- 告警按 P0/P1 排序，每条都带「查什么」，不是只报数字
-- 客单价置信度低时，卡片上直接标注「不用于硬筛选」——避免有人拿 23.3 元去定价格带
-- 执行轨迹默认折叠在底部，需要核对数字时再展开
+**为「少点几下」做的细节**
 
-**技术形态**：纯静态文件 + 标准库 `http.server`，零前端构建、零依赖。接口只有四个：
+- 目标输入框直接跑 Agent，结果弹窗分「执行计划 / 执行轨迹 / 最终结论」三页
+- 达人表勾选后可直接生成合作方案或邀约话术，全部一键复制
+- 告警每条都带「先查什么」，点「漏斗诊断」看曝光/点击率/转化率/客单价四环偏差
+- 复写前后合规项逐项对比，改写后仍有违规会标红
+- 顶栏显示 AI 状态与规划器选择：配置了 `DEEPSEEK_API_KEY` 时是「AI 已连接」，运行结果标注 LLM 规划器、步数与 token；没配时明确写「离线规则」
+- 离线模式下界面明确标注「规则基线，不是真 Agent」，不冒充
+
+**界面预览**（截图在 `docs/screenshots/`）
+
+| 工作台 | 达人筛选与评分 |
+|---|---|
+| ![工作台](docs/screenshots/dashboard.png) | ![达人筛选与评分](docs/screenshots/kols.png) |
+| **内容复写与合规** | **Agent 执行过程** |
+| ![内容复写与合规](docs/screenshots/content.png) | ![Agent 执行过程](docs/screenshots/agent.png) |
+| **达人分层** | **邀约管理** |
+| ![达人分层](docs/screenshots/tiers.png) | ![邀约管理](docs/screenshots/outreach.png) |
+| **合规检查** | **预算管理** |
+| ![合规检查](docs/screenshots/compliance.png) | ![预算管理](docs/screenshots/budget.png) |
+
+**LLM 模式**（配置 `DEEPSEEK_API_KEY` 后自动启用）
+
+![LLM 运行结果](docs/screenshots/llm-run.png)
+
+另外还有 `llm-rewrite.png`（模型复写 + 合规修复）、`strategy.png`（投放策略）、`library.png`（内容库）、`monitor.png`（数据监测）、`leads.png`（线索入库）、`reports.png`（日报中心）、`settings.png`（系统设置）。
+
+**技术形态**：纯静态文件 + 标准库 `http.server`，零前端构建、零依赖。前端在 `web/static/`：`index.html` + `css/app.css` + `js/`（ES Module，按页面拆分）。
+
+接口：
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | `/api/overview` | 驾驶舱数据（销售结构 / 告警 / 复盘） |
-| POST | `/api/run` | 跑一次 agent，返回 trace 与结构化结果 |
-| GET | `/api/brief?ids=` | 生成合作 brief（Markdown，可直接发人） |
-| GET | `/api/outreach?ids=` | 生成邀约话术（可直接复制发人） |
-| GET | `/api/report` | 生成日报（Markdown） |
+| GET | `/api/overview` | 驾驶舱聚合数据（销售结构 / 告警 / 复盘） |
+| GET | `/api/candidates` | 候选池四维评分 + 分层 + 预算分配 |
+| GET | `/api/trend` | 按日投放趋势 |
+| GET | `/api/tasks` | 最近运行记录（来自 traces） |
+| POST | `/api/run` | 跑一次 agent，返回 trace、plan、结论与 `agent_meta` |
+| GET | `/api/content/samples` | 内容样本 + 逐条合规预检 |
+| POST | `/api/content/rewrite` | 多平台改写 + 改写前后合规对比 |
+| GET | `/api/brief?ids=` | 合作 brief（Markdown） |
+| GET | `/api/outreach?ids=` | 邀约话术 |
+| GET | `/api/report` | 日报（Markdown） |
 | POST | `/api/notify` | 推送日报（默认 dry-run，落盘 outbox/） |
-| POST | `/api/pipeline` | 群消息 → 线索 → 评分 → 飞书写入 → 待发队列 |
-| GET | `/api/export` | 导出上次名单 CSV |
+| POST | `/api/pipeline` | 群消息 → 线索 → 评分 → 写入 → 待发队列 |
+| GET | `/api/funnel?kol_id=` | 漏斗诊断 |
+| GET | `/api/export?ids=` | 导出名单 CSV（带 BOM） |
 | GET | `/api/datasource` | 当前数据源（csv / sql / http） |
-| GET | `/api/llm/status` | 模型是否可用、模型名、累计 token 与延迟 |
-| POST | `/api/llm/test` | 连通性自检（未配 key 时明确报错） |
-| GET | `/api/last` | 最近一次运行结果（刷新页面不丢） |
+| GET | `/api/llm/status` | 模型可用性、模型名、累计用量 |
+| POST | `/api/llm/test` | 连通性自检 |
+| GET | `/api/last` | 最近一次运行结果 |
+| GET | `/api/reports` | outbox 历史日报列表 |
 
 `/api/run` 额外返回 `agent_meta`，把 Agent 的思考过程透明化：
 
@@ -185,8 +245,6 @@ python web/server.py
 {"planner": "llm", "model": "deepseek-chat", "plan": ["1. 先取销售结构…", "2. …"],
  "tokens": 149010, "steps": 10, "llm_available": true, "env_loaded": 3}
 ```
-
-**界面上的 AI 状态**：顶部一行显示「模型已连接 / 未配置 key（走离线规则）」，旁边是「测试 AI 连接」按钮；跑完一次后展开「模型计划」卡片，能看到它自己写的执行步骤和本次 token 消耗。
 
 ---
 
@@ -357,9 +415,11 @@ kol-selection-agent/
 │   ├── registry.py         # 14 个工具的 schema 与 handler
 │   ├── planner.py          # LLM 规划器（plan/act/repair/reflect/压缩/收尾）+ 规则规划器
 │   └── runner.py           # 执行、护栏、trace
+├── mcp/                    # stdio MCP Server（3 个工具）
+├── data/knowledge/         # RAG 知识库（品牌语气/合规/评分/案例）
 ├── web/                    # 本地 Web 工作台（零依赖）
-│   ├── server.py           # 11 个接口 + 静态文件服务
-│   └── static/             # index.html / style.css / app.js
+│   ├── server.py           # 数据接口 + 静态文件服务
+│   └── static/             # 零构建前端：index.html / css/app.css / js/*
 ├── sql/                    # 企业库对接：mapping.json / schema_enterprise.sql
 ├── scripts/                # build_sqlite_demo.py / daily_monitor.py
 ├── docs/

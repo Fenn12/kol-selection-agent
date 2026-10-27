@@ -1,0 +1,183 @@
+{
+  "summary": {
+    "ok": true,
+    "server": {
+      "name": "kol-ops-mcp",
+      "version": "0.1.0"
+    },
+    "protocol_version": "2024-11-05",
+    "tools": [
+      "search_knowledge",
+      "score_candidates",
+      "monitor_scan"
+    ],
+    "search_hits": 3,
+    "search_top": "content_playbook",
+    "scored": 60,
+    "picked": 8,
+    "spent": 560.0,
+    "alerts": 4
+  },
+  "transcript": [
+    {
+      "step": "initialize",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2024-11-05",
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            }
+          },
+          "serverInfo": {
+            "name": "kol-ops-mcp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "step": "tools/list",
+      "tools": [
+        "search_knowledge",
+        "score_candidates",
+        "monitor_scan"
+      ]
+    },
+    {
+      "step": "tools/call",
+      "name": "search_knowledge",
+      "result": {
+        "query": "小红书 极限词 字数",
+        "count": 3,
+        "hits": [
+          {
+            "doc": "content_playbook",
+            "title": "验收",
+            "score": 22.29,
+            "text": "验收\n- 改写前后各跑一次合规检查。\n- 小红书/抖音/视频号三个平台都要给正文与字数。\n- 字数低于区间下限视为不合格；不足时做一次长度调整。\n- 所有产出标记\"需人工终审\"。"
+          },
+          {
+            "doc": "compliance_rules",
+            "title": "极限词与绝对化",
+            "score": 16.4552,
+            "text": "极限词与绝对化\n- 禁止：最好、最有效、第一、唯一、国家级、顶级、100%、全网最低、史上最强。\n- \"第一\"作为序数（第一次、第一步）也会被规则命中，改写为\"头一次\"\"刚开始\"。"
+          },
+          {
+            "doc": "content_playbook",
+            "title": "平台要求",
+            "score": 16.4167,
+            "text": "平台要求\n- 小红书 300–500 字，标题具体，正文分 3–4 段，可用 emoji 但别堆。\n- 抖音 80–150 字，口语化，前 3 秒出现场景，结尾一句轻引导。\n- 视频号 120–200 字，语气稳，少用网络词，适合 30+ 人群。"
+          }
+        ]
+      }
+    },
+    {
+      "step": "tools/call",
+      "name": "score_candidates",
+      "result": {
+        "budget": 8000.0,
+        "scored": 60,
+        "tier_count": {
+          "S": 0,
+          "A": 10,
+          "B": 17,
+          "C": 33
+        },
+        "picked": 8,
+        "spent": 560.0,
+        "remaining": 7440.0,
+        "note": "已选满 8 人上限，剩余 7440 元（已用 7%）。建议提高单人预算换 S/A 层，或扩池后再分配。",
+        "picks": [
+          {
+            "kol_id": "K023",
+            "handle": "样例达人_23",
+            "platform": "视频号",
+            "tier": "A",
+            "score": 74.0,
+            "quote": 50.0
+          },
+          {
+            "kol_id": "K037",
+            "handle": "样例达人_37",
+            "platform": "抖音",
+            "tier": "A",
+            "score": 69.1,
+            "quote": 30.0
+          },
+          {
+            "kol_id": "K002",
+            "handle": "样例达人_02",
+            "platform": "小红书",
+            "tier": "A",
+            "score": 65.9,
+            "quote": 60.0
+          },
+          {
+            "kol_id": "K004",
+            "handle": "样例达人_04",
+            "platform": "抖音",
+            "tier": "A",
+            "score": 65.2,
+            "quote": 120.0
+          },
+          {
+            "kol_id": "K032",
+            "handle": "样例达人_32",
+            "platform": "抖音",
+            "tier": "A",
+            "score": 64.9,
+            "quote": 90.0
+          }
+        ]
+      }
+    },
+    {
+      "step": "tools/call",
+      "name": "monitor_scan",
+      "result": {
+        "alert_count": 4,
+        "by_severity": {
+          "P0": 2,
+          "P1": 2
+        },
+        "window": {
+          "recent_days": 3,
+          "baseline_days": 7
+        },
+        "alerts": [
+          {
+            "severity": "P0",
+            "kol_id": "K040",
+            "rule": "转化骤降",
+            "delta_pct": -64.8,
+            "hint": "素材衰减或落地页异常，先停投再排查"
+          },
+          {
+            "severity": "P0",
+            "kol_id": "K013",
+            "rule": "转化骤降",
+            "delta_pct": -56.2,
+            "hint": "素材衰减或落地页异常，先停投再排查"
+          },
+          {
+            "severity": "P1",
+            "kol_id": "K013",
+            "rule": "曝光异常飙升",
+            "delta_pct": 58.7,
+            "hint": "曝光涨但转化没涨，注意流量错配或刷量嫌疑"
+          },
+          {
+            "severity": "P1",
+            "kol_id": "K034",
+            "rule": "CPM 飙升",
+            "delta_pct": 46.3,
+            "hint": "竞价环境变化或定向跑偏，考虑缩量"
+          }
+        ]
+      }
+    }
+  ]
+}
