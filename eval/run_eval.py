@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Agent 层评测：测的不是「文案好不好」，而是「行为对不对」。
+Agent 行为评测。
 
-一个能说会道但会编造达人的 agent，比一个说话笨拙但会拒绝的 agent 危险得多。
-所以这里全部是行为断言：
+测的不是「文案好不好」，而是「行为对不对」：
+    预算不足会不会拒绝、没数据会不会停、异常能不能抓到、
+    复写后合规有没有清零、同输入是否稳定。
 
-    会不会在预算不足时拒绝
-    会不会在没数据时停下
-    会不会跳步直接给名单
-    同样输入是否稳定
-
-用法：python eval/run_eval.py [--verbose]
+用法：
+    python eval/run_eval.py                # 离线规则规划器（默认，无需 key）
+    python eval/run_eval.py --planner llm  # 用真实模型跑同一套断言
 """
 
 import argparse
@@ -23,57 +21,90 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from agent import loop  # noqa: E402
+from agent import llm, planner, runner  # noqa: E402
 
 
-def run_one(spec):
-    planner = loop.ScriptedPlanner(budget=spec.get("budget"),
-                                   sales_path=spec.get("sales"),
-                                   search_kwargs=spec.get("search_kwargs"))
-    agent = loop.Agent(planner, trace_dir=os.path.join(HERE, "_traces"))
-    return agent.run(spec["task"])
+def run_one(spec, use_llm):
+    p = (planner.LLMPlanner() if use_llm
+         else planner.RulePlanner(budget=spec.get("budget"), sales_path=spec.get("sales"),
+                                 search_kwargs=spec.get("search_kwargs")))
+    agent = runner.Agent(p, trace_dir=os.path.join(HERE, "_traces"))
+    return agent.run(spec["goal"])
+
+
+def _obs(rec, tool):
+    return next((s["observation"] for s in rec["trace"] if s["tool"] == tool), None)
 
 
 def check(spec, rec):
-    """返回 (通过?, 说明)"""
-    exp = spec.get("expect", {})
-    fail = []
+    exp, fail = spec.get("expect", {}), []
+    tools = [s["tool"] for s in rec["trace"]]
 
-    if "final_contains" in exp:
-        for kw in exp["final_contains"]:
-            if kw not in (rec["final"] or ""):
-                fail.append(f"结论缺少关键词「{kw}」")
+    for kw in exp.get("final_contains", []):
+        if kw not in (rec["final"] or ""):
+            fail.append(f"结论缺少「{kw}」")
 
     if "feasible" in exp:
-        alloc = next((s["observation"] for s in rec["trace"] if s["tool"] == "allocate_budget"), None)
-        got = bool(alloc and alloc.get("feasible") is True)
+        al = _obs(rec, "allocate_budget")
+        got = bool(al and al.get("feasible") is True)
         if got != exp["feasible"]:
-            fail.append(f"可行性与预期不符：期望 {exp['feasible']}，实际 {got}")
+            fail.append(f"可行性期望 {exp['feasible']}，实际 {got}")
 
     if exp.get("min_picked"):
-        alloc = next((s["observation"] for s in rec["trace"] if s["tool"] == "allocate_budget"), None)
-        n = (alloc or {}).get("picked_count", 0)
-        if n < exp["min_picked"]:
-            fail.append(f"入选人数不足：期望≥{exp['min_picked']}，实际 {n}")
+        al = _obs(rec, "allocate_budget") or {}
+        if al.get("picked_count", 0) < exp["min_picked"]:
+            fail.append(f"入选 {al.get('picked_count')} 人 < {exp['min_picked']}")
 
     if exp.get("matched_zero"):
-        sr = next((s["observation"] for s in rec["trace"] if s["tool"] == "search_candidates"), None)
-        if (sr or {}).get("matched", -1) != 0:
-            fail.append(f"预期候选池为空，实际 matched={(sr or {}).get('matched')}")
-
-    if "max_steps" in exp and rec["steps"] > exp["max_steps"]:
-        fail.append(f"步数超限：{rec['steps']} > {exp['max_steps']}")
+        sr = _obs(rec, "search_candidates") or {}
+        if sr.get("matched", -1) != 0:
+            fail.append(f"预期空池，实际 matched={sr.get('matched')}")
 
     if "exact_steps" in exp and rec["steps"] != exp["exact_steps"]:
-        fail.append(f"步数应为 {exp['exact_steps']}，实际 {rec['steps']}（说明没有及时停下）")
+        fail.append(f"步数应为 {exp['exact_steps']}，实际 {rec['steps']}（未及时停下）")
 
-    if "tool_sequence" in exp:
-        got = [s["tool"] for s in rec["trace"]]
-        if got != exp["tool_sequence"]:
-            fail.append(f"工具顺序不符：{' → '.join(got)}")
+    if "min_steps" in exp and rec["steps"] < exp["min_steps"]:
+        fail.append(f"步数 {rec['steps']} < {exp['min_steps']}（能力未串全）")
+
+    if exp.get("no_early_stop") and rec["stopped_early"]:
+        fail.append("中途终止，未跑完全流程")
+
+    for t in exp.get("tool_contains", []):
+        if t not in tools:
+            fail.append(f"未调用 {t}")
+
+    if exp.get("review_ok"):
+        rv = _obs(rec, "review_campaign")
+        if not rv or "overall" not in rv:
+            fail.append("未产出复盘结果")
+        elif not rv.get("best") or not rv.get("worst"):
+            fail.append("复盘缺少最好/最差分组")
+
+    if "monitor_rules" in exp:
+        mn = _obs(rec, "monitor_scan") or {}
+        got = {a["rule"] for a in mn.get("alerts", [])}
+        for rule in exp["monitor_rules"]:
+            if rule not in got:
+                fail.append(f"未命中规则「{rule}」，实际 {sorted(got)}")
+        if mn.get("alert_count", 0) < exp.get("min_alerts", 0):
+            fail.append(f"告警数 {mn.get('alert_count')} < {exp.get('min_alerts')}")
+
+    if exp.get("rewrites"):
+        n = len([s for s in rec["trace"] if s["tool"] == "rewrite_content"])
+        if n < exp["rewrites"]:
+            fail.append(f"复写只完成 {n} 条 < {exp['rewrites']}")
+
+    if exp.get("rewrite_compliance_clean"):
+        for s in rec["trace"]:
+            if s["tool"] != "rewrite_content":
+                continue
+            ac = (s["observation"].get("after_compliance") or {})
+            if ac and not ac.get("pass", True):
+                fail.append(f"{s['observation'].get('source_id')} 复写后仍有违规")
+                break
 
     if exp.get("deterministic"):
-        rec2 = run_one(spec)
+        rec2 = run_one(spec, use_llm=False)
         if rec2["final"] != rec["final"]:
             fail.append("两次运行结论不一致")
 
@@ -82,29 +113,34 @@ def check(spec, rec):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--planner", default="rule", choices=["rule", "llm"])
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
+    use_llm = args.planner == "llm"
+    if use_llm and not llm.available():
+        sys.exit("需要 DEEPSEEK_API_KEY 才能跑 llm 模式")
+
     specs = json.load(open(os.path.join(HERE, "tasks.json"), encoding="utf-8"))
-    print(f"Agent 行为评测：{len(specs)} 条任务｜规划器：scripted（离线基线）")
-    print("=" * 74)
+    print(f"Agent 行为评测：{len(specs)} 条 ｜ 规划器：{args.planner}")
+    print("=" * 76)
 
     passed = 0
     for sp in specs:
-        rec = run_one(sp)
+        rec = run_one(sp, use_llm)
         ok, why = check(sp, rec)
         passed += ok
-        flag = "PASS" if ok else "FAIL"
-        print(f"[{flag}] {sp['id']}  {sp['desc']}")
-        print(f"        步数 {rec['steps']} ｜ 耗时 {rec['elapsed_ms']}ms")
+        print(f"[{'PASS' if ok else 'FAIL'}] {sp['id']}  {sp['desc']}")
+        print(f"        步数 {rec['steps']} ｜ {rec['elapsed_ms']}ms" +
+              (" ｜ 中途终止" if rec["stopped_early"] else ""))
         if not ok:
             print(f"        ✗ {why}")
         if args.verbose:
             for s in rec["trace"]:
-                print(f"        · {s['tool']}({json.dumps(s['args'], ensure_ascii=False)})")
+                print(f"        · {s['tool']}")
         print()
 
-    print("=" * 74)
+    print("=" * 76)
     print(f"通过 {passed}/{len(specs)} = {passed / len(specs):.0%}")
     sys.exit(0 if passed == len(specs) else 1)
 

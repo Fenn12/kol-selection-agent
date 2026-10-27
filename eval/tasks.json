@@ -1,64 +1,70 @@
 [
   {
     "id": "T1",
-    "desc": "正常场景：预算充足，应给出可执行名单",
-    "task": "指压板新品起量",
+    "desc": "选人链路：应完成「解析数据→简报→检索→评分→分配」并给出名单",
+    "goal": "指压板新品起量，预算 8000",
     "budget": 8000,
-    "expect": {
-      "feasible": true,
-      "min_picked": 5,
-      "final_contains": ["预算", "名单"],
-      "max_steps": 6
-    }
+    "expect": {"feasible": true, "min_picked": 5,
+               "tool_contains": ["parse_product_sales", "build_brief", "search_candidates",
+                                 "score_candidates", "allocate_budget"]}
   },
   {
     "id": "T2",
     "desc": "预算低于最低报价：必须明确拒绝，不许硬凑名单",
-    "task": "起量",
+    "goal": "起量，预算 20",
     "budget": 20,
-    "expect": {
-      "feasible": false,
-      "final_contains": ["预算"],
-      "max_steps": 6
-    }
+    "expect": {"feasible": false, "final_contains": ["预算"]}
   },
   {
     "id": "T3",
-    "desc": "筛选条件无法满足：应说明原因并给出替代方向，不许返回空名单了事",
-    "task": "起量",
+    "desc": "筛选条件无法满足：应说明原因并给替代方向",
+    "goal": "起量",
     "budget": 8000,
     "search_kwargs": {"platform": "视频号", "min_followers": 100000},
-    "expect": {
-      "matched_zero": true,
-      "final_contains": ["没有符合条件"]
-    }
+    "expect": {"matched_zero": true, "final_contains": ["没有符合条件"]}
   },
   {
     "id": "T4",
-    "desc": "数据文件缺失：应在第一步就停下并报错，不许继续用默认值编数据",
-    "task": "起量",
+    "desc": "数据文件缺失：第一步就停，不许用默认值编数据",
+    "goal": "起量",
     "budget": 8000,
     "sales": "D:/not_exists_anywhere.xls",
-    "expect": {
-      "final_contains": ["报错"],
-      "exact_steps": 1
-    }
+    "expect": {"final_contains": ["报错"], "exact_steps": 1}
   },
   {
     "id": "T5",
-    "desc": "确定性：同样输入跑两次，结论必须完全一致（离线规划器不应有随机性）",
-    "task": "指压板新品起量",
+    "desc": "复盘：应给出整体 ROI 与最好/最差分组",
+    "goal": "把这波投放复盘一下",
     "budget": 8000,
-    "expect": {"deterministic": true}
+    "expect": {"review_ok": true, "final_contains": ["ROI"]}
   },
   {
     "id": "T6",
-    "desc": "工具调用顺序：必须按「解析数据 → 简报 → 检索 → 评分 → 分配」推进，不许跳步直接给名单",
-    "task": "指压板新品起量",
+    "desc": "监测：应命中注入的转化骤降与曝光飙升两类规则",
+    "goal": "监测一下有没有异常",
     "budget": 8000,
-    "expect": {
-      "tool_sequence": ["parse_product_sales", "build_brief", "search_candidates",
-                        "score_candidates", "allocate_budget"]
-    }
+    "expect": {"monitor_rules": ["转化骤降", "曝光异常飙升"], "min_alerts": 2}
+  },
+  {
+    "id": "T7",
+    "desc": "复写：3 条样本改写后合规问题应清零",
+    "goal": "把这几条文案改写一版",
+    "budget": 8000,
+    "expect": {"rewrites": 3, "rewrite_compliance_clean": true}
+  },
+  {
+    "id": "T8",
+    "desc": "全流程：四类能力串跑，不得中途终止",
+    "goal": "全流程跑一遍：指压板新品起量，预算 8000",
+    "budget": 8000,
+    "expect": {"no_early_stop": true, "min_steps": 15,
+               "final_contains": ["监测", "复盘"]}
+  },
+  {
+    "id": "T9",
+    "desc": "确定性：同输入两次运行结论完全一致",
+    "goal": "指压板新品起量，预算 8000",
+    "budget": 8000,
+    "expect": {"deterministic": true}
   }
 ]
