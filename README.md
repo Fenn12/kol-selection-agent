@@ -1,10 +1,10 @@
 # KOL Operations Agent
 
-> **English abstract** — A tool-using agent covering the full creator-marketing loop: creator selection → outreach brief → content rewriting → performance review → live monitoring. Twelve tools, two planners (LLM function-calling / offline rule baseline), and a guard layer that makes the agent **refuse** instead of fabricate when data is missing, budget is short, or candidates are empty. Nine behavioural evals.
+> **English abstract** — A tool-using agent covering the full creator-marketing loop: creator selection → outreach brief → content rewriting → performance review → live monitoring. Fourteen tools, two planners (LLM function-calling / offline rule baseline), and a guard layer that makes the agent **refuse** instead of fabricate when data is missing, budget is short, or candidates are empty. The LLM planner runs **plan → act → observe → repair → self-check**: it writes its own execution plan, calls tools on its own, and audits every number in its answer against a tool result before finalizing. Eleven behavioural evals.
 
 一个覆盖「达人筛选 → 合作 brief → 内容复写 → 数据复盘 → 投放监测 → 线索挖掘」的运营 Agent。
 
-**文档**：[使用指南](docs/USAGE.md)（从零跑通 → 接企微/飞书/第三方数据）　｜　[接库指南](docs/DATASOURCE.md)（接企业数据库）　｜　行为评测 `python eval/run_eval.py`
+**文档**：[PRD](docs/PRD.md)（产品需求：思考机制、功能域、非功能指标、已知局限）　｜　[使用指南](docs/USAGE.md)（从零跑通 → 接企微/飞书/第三方数据）　｜　[接库指南](docs/DATASOURCE.md)（接企业数据库）　｜　行为评测 `python eval/run_eval.py`
 
 它最重要的特性不是能做什么，而是**做不了的时候会说做不了**。
 
@@ -21,6 +21,47 @@
 | 未使用 | 任何公司内部经营数据、真实达人信息或投放策略 |
 
 **这份导出有个真坑**：所有指标都是区间值（`销量 5000-1w`、`转化率 5%-10%`）。`float()` 直接崩，取中点又会让误差叠加——所以 `parse_range()` 和「客单价置信度」是这个项目的一等公民，不是附属功能。
+
+---
+
+## 这个 Agent 怎么「思考」
+
+不是脚本，也不是套壳网页。给定一句自然语言目标后，模型自己决定做什么：
+
+```
+① PLAN     先写 3–6 步执行计划，并声明「还缺什么信息」——只给计划，不给答案
+② ACT      带 14 个工具的 JSON Schema 做 function calling，自己选工具、自己传参数
+③ OBSERVE  工具返回的事实回灌进上下文（单条截断 2400 字符，防超窗）
+④ REPAIR   参数不合法 → 把可接受参数回给模型，同一调用只重试一次
+⑤ REFLECT  模型准备作答时，强制自检一次：
+            «每个数字都对得上工具返回吗？有没有该查没查的？有没有该拒绝而你没拒绝的？»
+            → 发现问题就回去补查，确认无误才输出
+⑥ FINAL    判断依据（带数字）→ 结论/名单 → 风险与待人工确认项
+```
+
+**一次真实运行里自检抓到什么**（trace 可回放，见 `traces/`）：
+
+> 模型在第 9 步自查时自己列出三个问题：
+> 1. 「差 5–7 倍」是我自己算的派生值，不是工具返回，需标注；
+> 2. 用户要「起量」，我给了名单却**没跑监测、没跑复盘**，这两项影响预算该集中还是分散；
+> 3. `allocate_budget` 已提示「预算只用掉 8%、池子已选完」，我不该仍然输出看似完整的方案，**正确做法是先扩池或明确拒绝**。
+>
+> 然后它自己回头补调了 `review_campaign` 与 `monitor_scan`。
+
+这类行为不是靠规则写出来的，是模型按 system prompt 里的五条硬原则现场判断的。
+
+**配套机制**
+
+| 机制 | 作用 |
+|---|---|
+| 并行 tool_calls 补回执 | 模型一轮返回多个调用时逐个执行，每个 `tool_call_id` 都补 tool 消息，否则 OpenAI/DeepSeek 协议直接报 400 |
+| 上下文压缩 | 累计字符超 40,000 时，把更早的 tool 回执压成摘要（最近 8 条保留完整），长任务不撑爆窗口 |
+| 触顶收尾 | 步数或 token 触顶时，再问一次模型「基于已有事实把结论说完」，而不是丢一句占位话 |
+| 双上限 | 规划步数 ≤ 16、token ≤ 150,000、执行步数 ≤ 40 |
+| 降级不沉默 | 没配 key 时自动回退规则规划器，并在 UI / `agent_meta` / 结论里写明当前用的是哪个 |
+| 用量可观测 | `logs/llm_usage.jsonl` 记账，`/api/llm/status` 实时查 |
+
+**为什么还保留规则规划器**：它是行为基线。11 条评测跑的就是它——有了它，「模型到底有没有比规则做得好」才是可测量的，而不是一句宣传。
 
 ---
 
@@ -133,6 +174,19 @@ python web/server.py
 | POST | `/api/notify` | 推送日报（默认 dry-run，落盘 outbox/） |
 | POST | `/api/pipeline` | 群消息 → 线索 → 评分 → 飞书写入 → 待发队列 |
 | GET | `/api/export` | 导出上次名单 CSV |
+| GET | `/api/datasource` | 当前数据源（csv / sql / http） |
+| GET | `/api/llm/status` | 模型是否可用、模型名、累计 token 与延迟 |
+| POST | `/api/llm/test` | 连通性自检（未配 key 时明确报错） |
+| GET | `/api/last` | 最近一次运行结果（刷新页面不丢） |
+
+`/api/run` 额外返回 `agent_meta`，把 Agent 的思考过程透明化：
+
+```json
+{"planner": "llm", "model": "deepseek-chat", "plan": ["1. 先取销售结构…", "2. …"],
+ "tokens": 149010, "steps": 10, "llm_available": true, "env_loaded": 3}
+```
+
+**界面上的 AI 状态**：顶部一行显示「模型已连接 / 未配置 key（走离线规则）」，旁边是「测试 AI 连接」按钮；跑完一次后展开「模型计划」卡片，能看到它自己写的执行步骤和本次 token 消耗。
 
 ---
 
@@ -154,17 +208,29 @@ python run_agent.py --goal "把这几条文案改写一版"
 python eval/run_eval.py
 ```
 
-接模型（DeepSeek / 任一 OpenAI 兼容接口）：
+接模型（DeepSeek / 任一 OpenAI 兼容接口），两种配法二选一：
 
 ```bash
+# 方式一：写 .env（推荐，不会误提交；已加入 .gitignore）
+cp .env.example .env
+# 编辑 .env 填 DEEPSEEK_API_KEY=sk-xxx
+
+# 方式二：环境变量
 export DEEPSEEK_API_KEY=sk-xxx
 export DEEPSEEK_BASE_URL=https://api.deepseek.com/v1   # 可选
 export MODEL=deepseek-chat                              # 可选
-python run_agent.py --goal "..." --planner llm
-python eval/run_eval.py --planner llm
 ```
 
-零第三方依赖，只用标准库（`urllib` 直连，不引 openai 包）。
+然后：
+
+```bash
+python run_agent.py --goal "..." --planner llm      # auto 也行：有 key 自动走模型
+python eval/run_eval.py --planner llm               # 与规则规划器做对照
+```
+
+连通性自检：启动 Web 工作台后点「测试 AI 连接」，或 `curl -X POST 127.0.0.1:8765/api/llm/test`。
+
+零第三方依赖，只用标准库（`urllib` 直连，不引 openai 包）。`.env` 只补不覆盖已有的环境变量。
 
 ---
 
@@ -283,23 +349,25 @@ kol-selection-agent/
 │   ├── llm.py              # OpenAI 兼容客户端：重试 / JSON / token 记账
 │   ├── datasource.py       # 数据源抽象：csv / sql / http
 │   ├── notify.py           # 推送：SMTP，未配置则落盘
+│   ├── env.py              # .env 加载（只补不覆盖）
 │   ├── integrations.py     # 企微 / 星火飞瓜 / 飞书 三个适配器
 │   ├── pipeline.py         # 线索流水线：抽取→画像→评分→写表→话术
 │   ├── core.py             # 区间解析、商品简报、评分、预算分配
-│   ├── tools_extra.py      # 合作 brief、谈判、复写、复盘、监测
+│   ├── tools_extra.py      # 合作 brief、谈判、复写、复盘、监测、邀约、日报
 │   ├── registry.py         # 14 个工具的 schema 与 handler
-│   ├── planner.py          # LLM 规划器 + 离线规则规划器
+│   ├── planner.py          # LLM 规划器（plan/act/repair/reflect/压缩/收尾）+ 规则规划器
 │   └── runner.py           # 执行、护栏、trace
 ├── web/                    # 本地 Web 工作台（零依赖）
-│   ├── server.py           # 8 个接口 + 静态文件服务
+│   ├── server.py           # 11 个接口 + 静态文件服务
 │   └── static/             # index.html / style.css / app.js
 ├── sql/                    # 企业库对接：mapping.json / schema_enterprise.sql
 ├── scripts/                # build_sqlite_demo.py / daily_monitor.py
 ├── docs/
+│   ├── PRD.md              # 产品需求文档（思考机制 / 需求清单 / 指标 / 局限）
 │   ├── USAGE.md            # 使用指南（从零跑通 → 接企微/飞书）
 │   └── DATASOURCE.md       # 接库指南（三种方式 + 数据契约）
 ├── data/                   # 全部合成：销售分布 / 候选池 / 投放数据 / 待复写样本
-├── eval/                   # 9 条行为评测
+├── eval/                   # 11 条行为评测
 └── logs/                   # token 记账（gitignore）
 ```
 
@@ -309,7 +377,7 @@ kol-selection-agent/
 
 ## 已知局限
 
-1. **LLM 规划器未做端到端验证**：本仓库的自动化测试只覆盖离线规则规划器。接入 key 后请先跑 `eval/run_eval.py --planner llm` 做对照，再用于生产。
+1. **自检只触发一次**：REFLECT 在模型第一次准备作答时注入，整个任务内只做一轮。实测能抓出"该查没查""该拒绝没拒绝"，但若补查后又产生新问题，不会再自查第二遍。
 2. **离线规划的意图识别是关键词匹配**：复合指令（如"先复盘再改文案"）可能识别不全。
 3. **候选池仅 60 人**：分位归一化在小样本下排序不稳，真实使用应扩到百人以上。
 4. **评分不含内容语义**：内容质量用互动率、爆文率等代理指标，没做语义理解。
