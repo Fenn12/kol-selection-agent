@@ -14,7 +14,8 @@ import os
 import re
 from collections import defaultdict
 
-from . import llm
+from . import datasource, llm
+from .core import parse_product_sales
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -26,6 +27,13 @@ DATA = os.path.join(ROOT, "data")
 # ------------------------------------------------------------
 
 def _read_csv(name):
+    """统一走数据源抽象：csv / sql / http 都能用同一个名字取到数据。"""
+    mapping = {"candidates.csv": "candidates",
+               "campaign_performance.csv": "campaign",
+               "content_samples.json": "content_samples"}
+    ds = mapping.get(name)
+    if ds:
+        return datasource.load(ds)
     with open(os.path.join(DATA, name), encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
 
@@ -181,7 +189,7 @@ def rewrite_content(sample_id=None, text=None, platform="小红书", product="�
     """复写一条内容。有 key 走模型，无 key 走规则化降级版本。"""
     src = None
     if sample_id:
-        samples = json.load(open(os.path.join(DATA, "content_samples.json"), encoding="utf-8"))
+        samples = datasource.load("content_samples")
         src = next((s for s in samples if s["id"] == sample_id), None)
         if not src:
             return {"error": f"找不到样本 {sample_id}"}
@@ -376,3 +384,113 @@ def monitor_scan(recent=3, baseline=7):
             "alert_count": len(alerts),
             "by_severity": {s: sum(1 for a in alerts if a["severity"] == s) for s in ("P0", "P1")},
             "alerts": alerts}
+
+
+# ------------------------------------------------------------
+# E. 可直接发出去的产出：邀约话术 / 日报
+# ------------------------------------------------------------
+
+OUTREACH_SYSTEM = """你是达人商务，写一条首次邀约私信。
+
+要求：
+1. 前两句必须让对方知道「你了解他的内容」，提到具体内容方向或受众，不要群发感
+2. 说清三件事：合作形式、预算区间、需要他做什么
+3. 不夸大产品功效，不承诺效果，不写医疗相关表述
+4. 结尾给一个低门槛的下一步（发个样品 / 约 15 分钟沟通），不要逼单
+5. 150 字以内，口语，不用「亲」「宝子」这类称呼
+
+输出 JSON：{"subject": "一句话主题", "body": "正文", "tips": ["发送前要确认的点"]}"""
+
+
+def draft_outreach_message(kol_ids, channel="私信"):
+    """为指定达人生成邀约话术。有 key 走模型，无 key 用模板。"""
+    cands = {c["kol_id"]: c for c in _read_csv("candidates.csv")}
+    out = []
+    for kid in kol_ids[:5]:
+        c = cands.get(kid)
+        if not c:
+            out.append({"kol_id": kid, "error": "候选人池中无此 id"})
+            continue
+        q = float(c["quote"])
+        low, high = round(q * 0.75), round(q * 0.95)
+
+        if llm.available():
+            try:
+                data = llm.chat_json([
+                    {"role": "system", "content": OUTREACH_SYSTEM},
+                    {"role": "user", "content":
+                        f"达人：{c['handle']}（{c['platform']}，{c['category']}，"
+                        f"粉丝 {c['followers']}，受众 {c['audience_age']} 岁 / {c['audience_city']}）\n"
+                        f"产品：足底按摩指压板（居家健身器材，非医疗器械）\n"
+                        f"预算区间：{low}–{high} 元\n渠道：{channel}"}],
+                    temperature=0.7, max_tokens=700)
+                out.append({"kol_id": kid, "handle": c["handle"], "channel": channel,
+                            "subject": data.get("subject", ""), "body": data.get("body", ""),
+                            "tips": data.get("tips", []), "mode": "llm"})
+                continue
+            except llm.LLMError:
+                pass
+
+        body = (
+            f"你好，我是做家清与居家健身类目的商务。看到你在「{c['category']}」方向的内容，"
+            f"尤其是面向 {c['audience_age']} 岁、{c['audience_city']}人群那几条，节奏和真实感我们很认可。\n\n"
+            f"这次想合作一款足底按摩指压板：{channel} 单条内容，预算 {low}–{high} 元，"
+            f"需要你按我们给的卖点方向出稿，脚本先过一版再拍。\n\n"
+            f"如果方向合适，我先寄一套样品给你试试，用着顺手再谈档期。方便的话回我一句就行。"
+        )
+        out.append({"kol_id": kid, "handle": c["handle"], "channel": channel,
+                    "subject": f"{c['handle']} × 指压板合作邀约",
+                    "body": body,
+                    "tips": ["发送前确认对方近期内容方向是否仍是该垂类",
+                             "报价区间按 75–95 折给，留出谈判空间",
+                             "不要在首次私信里附产品链接，容易被判营销"],
+                    "mode": "offline_template"})
+    return {"messages": out, "count": len(out)}
+
+
+def compose_daily_report(budget=8000.0, top_n=5):
+    """生成给主管看的日报：一屏说清「昨天怎么样、今天要做什么」。"""
+    mon = monitor_scan()
+    rev = review_campaign("content_type")
+    stats = parse_product_sales()
+
+    p0 = [a for a in mon.get("alerts", []) if a["severity"] == "P0"]
+    p1 = [a for a in mon.get("alerts", []) if a["severity"] == "P1"]
+
+    lines = ["# 达人投放日报", ""]
+    lines.append(f"数据源：{stats.get('数据源', 'n/a')}　｜　监控窗口：近 {mon['window']['recent_days']} 天 vs 前 {mon['window']['baseline_days']} 天")
+    lines.append("")
+
+    lines.append("## 一、整体")
+    o = rev["overall"]
+    lines.append(f"- 花费 {o['spend']:,.0f} 元，成交 {o['gmv']:,.0f} 元，整体 ROI **{o['roi']}**")
+    lines.append(f"- 内容类型表现：最好 **{rev['best']}**，最差 **{rev['worst']}**")
+    lines.append(f"- 商品侧客单价 {stats.get('估算客单价')} 元（置信度{stats.get('客单价_置信度')}）")
+    lines.append("")
+
+    lines.append(f"## 二、要动的（{len(p0) + len(p1)} 条）")
+    if not p0 and not p1:
+        lines.append("- 本期未命中告警阈值。注意：无告警不等于无风险，可能是阈值过宽。")
+    for a in (p0 + p1):
+        lines.append(f"- **[{a['severity']}] {a['kol_id']} {a['rule']}（{a['delta_pct']}%）** — {a['hint']}")
+    lines.append("")
+
+    lines.append("## 三、建议动作")
+    acts = []
+    for a in p0:
+        acts.append(f"{a['kol_id']} 先停投，排查{a['rule']}原因")
+    if rev["worst"]:
+        acts.append(f"把预算从「{rev['worst']}」向「{rev['best']}」倾斜")
+    if len(acts) < 3:
+        acts.append("对 S/A 层达人补发合作 brief，锁定下周档期")
+    for i, t in enumerate(acts[:4], 1):
+        lines.append(f"{i}. {t}")
+    lines.append("")
+
+    lines.append("## 四、需要人工确认")
+    lines.append("- 监测阈值是经验值，未做本品类校准")
+    lines.append("- 内容类产出需人工终审后发布")
+    lines.append(f"- 预算口径按 {budget:,.0f} 元计算，实际以财务为准")
+
+    return {"markdown": "\n".join(lines), "p0": len(p0), "p1": len(p1),
+            "roi": o["roi"], "top_n": top_n}

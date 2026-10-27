@@ -67,7 +67,7 @@ class Agent:
         self.warnings = []
         self.trace_dir = trace_dir
 
-    def run(self, goal, max_steps=20):
+    def run(self, goal, max_steps=40):
         t0 = time.time()
         final, stopped = None, None
 
@@ -137,6 +137,10 @@ class Agent:
             c.reviews.append(obs)
         elif tool == "rewrite_content":
             c.rewrites.append(obs)
+        elif tool == "draft_outreach_message":
+            c.outreach = obs
+        elif tool == "compose_daily_report":
+            c.report = obs
         elif tool == "diagnose_funnel":
             if not obs.get("error"):
                 c.funnels.append(obs)

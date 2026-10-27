@@ -24,6 +24,8 @@ class Ctx:
         self.reviews = []
         self.rewrites = []
         self.funnels = []
+        self.outreach = {}
+        self.report = {}
         self.artifacts = []
 
 
@@ -75,6 +77,14 @@ def h_funnel(ctx, kol_id):
 
 def h_monitor(ctx, recent=3, baseline=7):
     return tools_extra.monitor_scan(recent=recent, baseline=baseline)
+
+
+def h_outreach(ctx, kol_ids, channel="私信"):
+    return tools_extra.draft_outreach_message(kol_ids, channel=channel)
+
+
+def h_report(ctx, budget=8000):
+    return tools_extra.compose_daily_report(budget=budget)
 
 
 # ---------- specs ----------
@@ -139,6 +149,17 @@ SPECS = [
      "parameters": {"type": "object", "properties": {
          "kol_id": {"type": "string"}}, "required": ["kol_id"]}},
 
+    {"name": "draft_outreach_message", "handler": h_outreach,
+     "description": "为指定达人生成首次邀约话术（含发送前注意事项）。可直接复制发人。",
+     "parameters": {"type": "object", "properties": {
+         "kol_ids": {"type": "array", "items": {"type": "string"}},
+         "channel": {"type": "string"}}, "required": ["kol_ids"]}},
+
+    {"name": "compose_daily_report", "handler": h_report,
+     "description": "生成给主管的投放日报：整体数据、要动的告警、建议动作、需人工确认项。",
+     "parameters": {"type": "object", "properties": {
+         "budget": {"type": "number"}}, "required": []}},
+
     {"name": "monitor_scan", "handler": h_monitor,
      "description": "投放中滚动监测：近 N 天 vs 前 M 天，命中阈值即告警（P0/P1）。",
      "parameters": {"type": "object", "properties": {
@@ -151,7 +172,8 @@ BY_NAME = {s["name"]: s for s in SPECS}
 SCHEMAS = [{k: v for k, v in s.items() if k != "handler"} for s in SPECS]
 
 # 需要人工确认的高风险工具：模型调用后要标注「待人工复核」
-NEEDS_REVIEW = {"draft_collab_brief", "rewrite_content", "allocate_budget"}
+NEEDS_REVIEW = {"draft_collab_brief", "rewrite_content", "allocate_budget",
+                "draft_outreach_message"}
 
 
 def call(name, ctx, args):

@@ -11,6 +11,8 @@ import csv
 import os
 import re
 
+from . import datasource
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, "data")
@@ -25,7 +27,10 @@ _UNIT = {"w": 10_000, "W": 10_000, "万": 10_000, "k": 1_000, "K": 1_000}
 
 
 def _to_number(tok):
-    tok = tok.strip().replace(",", "")
+    # 数据库返回的是 int/float，CSV 返回的是字符串，两种都要能吃
+    if isinstance(tok, (int, float)):
+        return float(tok)
+    tok = str(tok if tok is not None else "").strip().replace(",", "")
     if not tok:
         return 0.0
     m = re.match(r"^([\d.]+)\s*(w|W|万|k|K)?$", tok)
@@ -69,14 +74,21 @@ def parse_product_sales(path=None):
 
     返回：总量、渠道结构、达人效率、转化率 —— 供后续生成简报使用。
     """
-    path = path or os.path.join(DATA, "product_sales.sample.csv")
-    if not os.path.exists(path):
-        return {"error": f"文件不存在：{path}"}
-
-    with open(path, encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
+    if path:
+        # 显式传了文件路径：直接读 CSV（不经过数据源，便于临时验证）
+        if not os.path.exists(path):
+            return {"error": f"文件不存在：{path}"}
+        with open(path, encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
+        src_name = os.path.basename(path)
+    else:
+        try:
+            rows = datasource.load("product_sales")
+            src_name = datasource.get().name
+        except datasource.DataSourceError as e:
+            return {"error": str(e)}
     if not rows:
-        return {"error": "空文件"}
+        return {"error": "销售数据为空"}
 
     # 优先取「总计」行，没有则按日累加区间中值（近似）
     total = next((r for r in rows if str(r.get("日期", "")).strip() == "总计"), None)
@@ -112,7 +124,7 @@ def parse_product_sales(path=None):
     per_video = qty_mid / creators["带货视频"] if creators["带货视频"] else 0.0
 
     return {
-        "数据源": os.path.basename(path),
+        "数据源": src_name,
         "区间提示": "平台导出为区间值，此处取区间中值近似，非精确数",
         "销售额_中值": round(sales_mid),
         "销售额_区间": [round(sales_lo), round(sales_hi)],
@@ -184,9 +196,10 @@ def build_brief(stats, goal="起量"):
 # ------------------------------------------------------------
 
 def load_candidates(path=None):
-    path = path or os.path.join(DATA, "candidates.csv")
-    with open(path, encoding="utf-8-sig") as f:
-        return list(csv.DictReader(f))
+    if path:
+        with open(path, encoding="utf-8-sig") as f:
+            return list(csv.DictReader(f))
+    return datasource.load("candidates")
 
 
 def search_candidates(platform=None, price_band=None, min_followers=0,

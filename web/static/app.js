@@ -32,6 +32,7 @@ function renderChips() {
     `<span class="chip ${llmOn ? 'on' : ''}">${llmOn ? '大模型已就绪' : '离线规则模式'}</span>`,
     `<span class="chip">扫描 ${o.monitor?.scanned ?? '—'} 位达人</span>`,
     `<span class="chip">窗口 ${o.monitor?.window?.recent_days ?? 3} 天 / 基线 ${o.monitor?.window?.baseline_days ?? 7} 天</span>`,
+    `<span class="chip">数据源 ${esc(o.datasource?.source ?? 'csv')}</span>`,
     `<span class="chip warn">数据为合成样例</span>`,
   ].join('');
   if (llmOn) $('#llmState').textContent = '（已检测到 key）';
@@ -173,7 +174,10 @@ function renderResult(rec) {
         <td class="num">${p.score}</td>
         <td class="num">${money(p.quote)}</td>
         <td style="font-size:11.5px;color:var(--muted)">${esc(p.reason)}</td>
-        <td><button class="btn-s" data-brief="${esc(p.kol_id)}">Brief</button></td>
+        <td style="white-space:nowrap">
+          <button class="btn-s" data-brief="${esc(p.kol_id)}">Brief</button>
+          <button class="btn-s" data-outreach="${esc(p.kol_id)}">邀约</button>
+        </td>
       </tr>`).join('') + '</tbody></table>');
   }
 
@@ -241,6 +245,7 @@ function renderResult(rec) {
 
   renderTrace(rec.trace || []);
   bindBriefButtons();
+  bindOutreachButtons();
 }
 
 function renderTrace(trace) {
@@ -278,6 +283,79 @@ function bindBriefButtons() {
   });
 }
 
+function bindOutreachButtons() {
+  document.querySelectorAll('[data-outreach]').forEach((b) => {
+    b.onclick = async () => {
+      const id = b.getAttribute('data-outreach');
+      const old = b.textContent;
+      b.textContent = '…';
+      try {
+        const r = await fetch(`/api/outreach?ids=${encodeURIComponent(id)}`);
+        const d = await r.json();
+        const msg = (d.messages || [])[0];
+        if (!msg || msg.error) throw new Error(msg?.error || '生成失败');
+        const text = `${msg.subject}\n\n${msg.body}\n\n（发送前确认：${(msg.tips || []).join('；')}）`;
+        await navigator.clipboard.writeText(text);
+        b.textContent = '已复制';
+      } catch (e) {
+        b.textContent = '失败';
+      }
+      setTimeout(() => { b.textContent = old; }, 1600);
+    };
+  });
+}
+
+async function generateReport() {
+  const btn = $('#reportBtn');
+  btn.disabled = true;
+  btn.textContent = '生成中…';
+  try {
+    const budget = Number($('#budget').value) || 8000;
+    const r = await fetch(`/api/report?budget=${budget}`);
+    const md = await r.text();
+    $('#reportBody').textContent = md;
+    $('#reportCard').style.display = '';
+    $('#reportMeta').textContent = `${md.length} 字 · 可直接复制或推送`;
+    await navigator.clipboard.writeText(md);
+    $('#reportBtn').textContent = '已生成并复制';
+  } catch (e) {
+    $('#reportBody').textContent = `生成失败：${e.message}`;
+    $('#reportCard').style.display = '';
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = '生成日报'; }, 1800);
+  }
+}
+
+function bindReportActions() {
+  $('#reportBtn').onclick = generateReport;
+  $('#copyReport').onclick = async () => {
+    await navigator.clipboard.writeText($('#reportBody').textContent || '');
+    $('#copyReport').textContent = '已复制';
+    setTimeout(() => { $('#copyReport').textContent = '复制'; }, 1500);
+  };
+  $('#pushReport').onclick = async () => {
+    const btn = $('#pushReport');
+    btn.disabled = true;
+    btn.textContent = '推送中…';
+    try {
+      const r = await fetch('/api/notify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: true, budget: Number($('#budget').value) || 8000 }),
+      });
+      const d = await r.json();
+      $('#reportMeta').textContent = d.sent
+        ? `已发送给 ${(d.recipients || []).join(', ')}`
+        : `未发送：${d.reason || d.error || d.mode}${d.path ? ' → ' + d.path : ''}`;
+    } catch (e) {
+      $('#reportMeta').textContent = `推送失败：${e.message}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '推送测试';
+    }
+  };
+}
+
 document.querySelectorAll('.preset').forEach((p) => {
   p.onclick = () => runAgent(p.dataset.goal);
 });
@@ -291,4 +369,5 @@ $('#runBtn').onclick = () => {
 
 $('#budget').onchange = loadOverview;
 
+bindReportActions();
 loadOverview();

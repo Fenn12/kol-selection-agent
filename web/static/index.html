@@ -51,7 +51,10 @@
         <h1>今日运营驾驶舱</h1>
         <p id="goalLine">指压板新品 —— 家清类目 · 数据为合成样例</p>
       </div>
-      <div class="chips" id="chips"></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+        <button class="btn-s" id="reportBtn" style="padding:5px 11px">生成日报</button>
+        <div class="chips" id="chips"></div>
+      </div>
     </div>
 
     <div class="kpis" id="kpis"></div>
@@ -81,6 +84,18 @@
         <div class="meta" id="resultMeta">尚未运行</div>
       </div>
       <div class="card-b" id="result"><div class="empty">点左侧任意指令开始</div></div>
+    </div>
+
+    <div class="card" id="reportCard" style="display:none">
+      <div class="card-h">
+        <h2>日报（可直接发主管）</h2>
+        <div style="display:flex;gap:6px">
+          <button class="btn-s" id="copyReport">复制</button>
+          <button class="btn-s" id="pushReport">推送测试</button>
+        </div>
+      </div>
+      <div class="card-b"><div class="final" id="reportBody"></div>
+        <div class="meta" id="reportMeta" style="margin-top:8px"></div></div>
     </div>
 
     <div class="card" id="traceCard" style="display:none">

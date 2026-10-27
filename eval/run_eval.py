@@ -23,6 +23,23 @@ sys.path.insert(0, ROOT)
 
 from agent import llm, planner, runner  # noqa: E402
 
+# 保证 trace 里能看到日报与邀约的关键字段（runner 默认会裁掉大字段）
+_orig_shrink = runner._shrink
+
+
+def _shrink(obs, limit=400):
+    if isinstance(obs, dict) and "markdown" in obs:
+        return {"markdown": obs["markdown"][:200], "p0": obs.get("p0"),
+                "p1": obs.get("p1"), "roi": obs.get("roi")}
+    if isinstance(obs, dict) and "messages" in obs:
+        return {"count": obs.get("count"),
+                "messages": [{k: m.get(k) for k in ("kol_id", "handle", "subject", "body", "mode")}
+                             for m in obs["messages"]]}
+    return _orig_shrink(obs, limit)
+
+
+runner._shrink = _shrink
+
 
 def run_one(spec, use_llm):
     p = (planner.LLMPlanner() if use_llm
@@ -102,6 +119,20 @@ def check(spec, rec):
             if ac and not ac.get("pass", True):
                 fail.append(f"{s['observation'].get('source_id')} 复写后仍有违规")
                 break
+
+    if exp.get("report_ok"):
+        rp = _obs(rec, "compose_daily_report") or {}
+        if not rp.get("markdown"):
+            fail.append("未生成日报正文")
+
+    if exp.get("outreach_ok"):
+        ot = _obs(rec, "draft_outreach_message") or {}
+        if ot.get("count", 0) < exp.get("min_outreach", 1):
+            fail.append(f"邀约话术数量 {ot.get('count')} < {exp.get('min_outreach', 1)}")
+        else:
+            msg = (ot.get("messages") or [{}])[0]
+            if not msg.get("body"):
+                fail.append("邀约话术正文为空")
 
     if exp.get("deterministic"):
         rec2 = run_one(spec, use_llm=False)

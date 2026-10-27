@@ -22,7 +22,7 @@
 
 ---
 
-## 四类能力
+## 五类能力
 
 ### A. 达人筛选与合作
 
@@ -59,6 +59,15 @@ parse_product_sales → build_brief → search_candidates → score_candidates �
 
 ---
 
+### E. 可直接发出去的产出
+
+`draft_outreach_message` 生成首次邀约话术（提到对方具体内容方向、说清预算区间、低门槛下一步），
+`compose_daily_report` 生成给主管的日报（整体数据 / 要动的告警 / 建议动作 / 需人工确认）。
+
+这两类都不需要人再加工：话术可复制直接发，日报可推送或贴进群。
+
+---
+
 ## Web 工作台（推荐给运营用）
 
 ```bash
@@ -91,6 +100,9 @@ python web/server.py
 | GET | `/api/overview` | 驾驶舱数据（销售结构 / 告警 / 复盘） |
 | POST | `/api/run` | 跑一次 agent，返回 trace 与结构化结果 |
 | GET | `/api/brief?ids=` | 生成合作 brief（Markdown，可直接发人） |
+| GET | `/api/outreach?ids=` | 生成邀约话术（可直接复制发人） |
+| GET | `/api/report` | 生成日报（Markdown） |
+| POST | `/api/notify` | 推送日报（默认 dry-run，落盘 outbox/） |
 | GET | `/api/export` | 导出上次名单 CSV |
 
 ---
@@ -127,6 +139,62 @@ python eval/run_eval.py --planner llm
 
 ---
 
+## 接企业内部数据源
+
+业务代码不动，只切一个环境变量：
+
+```bash
+KOL_DATASOURCE=csv     # 默认，读 data/*.csv
+KOL_DATASOURCE=sql     # 读数据库，SQL 写在 sql/mapping.json
+KOL_DATASOURCE=http    # 调内网 API
+```
+
+**改 SQL 就能接**：把 `sql/mapping.json` 的查询换成你自己的表，字段名对不上就在 `columns` 里加映射（左侧你的列名，右侧标准名）。
+
+```bash
+export KOL_DATASOURCE=sql
+export KOL_DB_URL="mysql://reader:pass@10.0.0.12:3306/marketing"
+```
+
+驱动不匹配（Oracle / 达梦 / ClickHouse）时，写个模块暴露 `connect()`，用 `KOL_DB_MODULE=my_pkg.kol_db` 挂上去，SQL 写法不用改。
+
+**已经验证可行**：
+
+```bash
+python scripts/build_sqlite_demo.py          # 把样例数据灌进 SQLite
+KOL_DATASOURCE=sql KOL_DB_URL="sqlite:///data/demo.db" python run_agent.py --goal "起量"
+```
+
+同一份数据，CSV 与 SQL 两种来源跑出来结果完全一致（18 步 / 8 人 / 4 条告警）。
+
+完整接入说明见 [`docs/DATASOURCE.md`](docs/DATASOURCE.md)，含数据契约、口径提醒与常见问题。
+
+---
+
+## 定时监测
+
+```bash
+python scripts/daily_monitor.py              # 有 P0 才推送
+python scripts/daily_monitor.py --always     # 每天都推
+python scripts/daily_monitor.py --dry-run    # 不发送，落盘到 outbox/
+```
+
+**默认只在有 P0 时推送。** 每天发一封「一切正常」，三周后没人会打开——要发就发需要动手的。
+
+定时方式：
+
+```bash
+# Windows 计划任务，每天 9:00
+schtasks /create /tn "KOLDailyMonitor" /tr "python D://path//scripts//daily_monitor.py" /sc daily /st 09:00
+
+# Linux / macOS
+0 9 * * * cd /path/to/kol-selection-agent && python scripts/daily_monitor.py >> logs/cron.log 2>&1
+```
+
+推送没配 SMTP 时不报错，落到 `outbox/`，链路照样能验证。配置见 `agent/notify.py` 顶部注释。
+
+---
+
 ## 三个设计决定
 
 ### 1. 能算的用代码，要写的用模型
@@ -152,7 +220,7 @@ python eval/run_eval.py --planner llm
 
 ## Agent 行为评测
 
-`eval/tasks.json` 里 9 条任务，全部是行为断言：
+`eval/tasks.json` 里 11 条任务，全部是行为断言：
 
 | ID | 测什么 |
 |---|---|
@@ -165,10 +233,12 @@ python eval/run_eval.py --planner llm
 | T7 | 3 条样本复写后合规问题清零 |
 | T8 | 四类能力串跑不中途终止 |
 | T9 | 同输入两次运行结论一致 |
+| T10 | 日报包含整体数据、P0 清单与建议动作 |
+| T11 | 邀约话术非空且含发送前确认项 |
 
 ```bash
 $ python eval/run_eval.py
-通过 9/9 = 100%
+通过 11/11 = 100%
 ```
 
 **这不是模型效果指标**，是行为断言通过率。区别写在这里，免得被误读。
@@ -182,14 +252,19 @@ kol-selection-agent/
 ├── run_agent.py            # CLI
 ├── agent/
 │   ├── llm.py              # OpenAI 兼容客户端：重试 / JSON / token 记账
+│   ├── datasource.py       # 数据源抽象：csv / sql / http
+│   ├── notify.py           # 推送：SMTP，未配置则落盘
 │   ├── core.py             # 区间解析、商品简报、评分、预算分配
 │   ├── tools_extra.py      # 合作 brief、谈判、复写、复盘、监测
-│   ├── registry.py         # 12 个工具的 schema 与 handler
+│   ├── registry.py         # 14 个工具的 schema 与 handler
 │   ├── planner.py          # LLM 规划器 + 离线规则规划器
 │   └── runner.py           # 执行、护栏、trace
 ├── web/                    # 本地 Web 工作台（零依赖）
-│   ├── server.py           # 4 个接口 + 静态文件服务
+│   ├── server.py           # 8 个接口 + 静态文件服务
 │   └── static/             # index.html / style.css / app.js
+├── sql/                    # 企业库对接：mapping.json / schema_enterprise.sql
+├── scripts/                # build_sqlite_demo.py / daily_monitor.py
+├── docs/DATASOURCE.md      # 接库指南（三种方式 + 数据契约）
 ├── data/                   # 全部合成：销售分布 / 候选池 / 投放数据 / 待复写样本
 ├── eval/                   # 9 条行为评测
 └── logs/                   # token 记账（gitignore）
@@ -206,7 +281,8 @@ kol-selection-agent/
 3. **候选池仅 60 人**：分位归一化在小样本下排序不稳，真实使用应扩到百人以上。
 4. **评分不含内容语义**：内容质量用互动率、爆文率等代理指标，没做语义理解。
 5. **监测阈值未经真实数据校准**：50% / 30% 这些数字来自经验，换品类需重标。
-6. **未接平台 API**：达人数据与投放数据均需手动导入。
+6. **未接平台 API**：达人数据与投放数据需由调度或人工导入（数据源层已留出 HTTP 接口）。
+7. **数据源整源切换**：目前 csv/sql/http 三者互斥，不能部分数据集走库、部分走本地。
 
 ---
 

@@ -103,6 +103,7 @@ INTENTS = {
     "复写": ["复写", "改写", "文案", "内容", "润色"],
     "复盘": ["复盘", "roi", "效果", "转化", "归因"],
     "监测": ["监测", "预警", "异常", "告警", "监控"],
+    "日报": ["日报", "周报", "汇报", "报给", "总结一下"],
 }
 
 
@@ -110,7 +111,7 @@ def detect(goal):
     g = goal.lower()
     hit = {k for k, ws in INTENTS.items() if any(w in g for w in ws)}
     if any(w in goal for w in ("全流程", "完整", "端到端", "一条龙")):
-        return {"筛选", "合作", "复盘", "监测", "复写"}
+        return {"筛选", "合作", "复盘", "监测", "复写", "日报"}
     return hit or {"筛选"}
 
 
@@ -140,6 +141,7 @@ class RulePlanner:
                 steps += [
                     ("negotiation_advice", lambda c: {"kol_ids": _picked(c)[:5]}),
                     ("draft_collab_brief", lambda c: {"kol_ids": _picked(c)[:3]}),
+                    ("draft_outreach_message", lambda c: {"kol_ids": _picked(c)[:3]}),
                 ]
         if "复盘" in want:
             steps += [
@@ -151,6 +153,12 @@ class RulePlanner:
             steps += [
                 ("monitor_scan", lambda c: {"recent": 3, "baseline": 7}),
                 ("diagnose_funnel", lambda c: {"kol_id": _first_p0(c)}),
+            ]
+        if "日报" in want:
+            steps += [
+                ("monitor_scan", lambda c: {"recent": 3, "baseline": 7}),
+                ("review_campaign", lambda c: {"group_by": "content_type"}),
+                ("compose_daily_report", lambda c: {"budget": self.budget}),
             ]
         if "复写" in want:
             for sid in ("C1", "C2", "C3"):
@@ -208,6 +216,10 @@ class RulePlanner:
             for w in ctx.rewrites:
                 L.append(f"　　· {w['source_id']} 改前违规 {w['before_compliance']['hit_count']} 处 → "
                          f"改后 {w.get('after_compliance', {}).get('hit_count', '?')} 处，模式 {w.get('mode')}")
+        if getattr(ctx, "report", None):
+            L.append(f"【日报】已生成 {len(ctx.report.get('markdown',''))} 字，P0 {ctx.report.get('p0')} / P1 {ctx.report.get('p1')}")
+        if getattr(ctx, "outreach", None):
+            L.append(f"【邀约】生成 {ctx.outreach.get('count')} 条话术（{ctx.outreach.get('messages',[{}])[0].get('mode') if ctx.outreach.get('messages') else '-'}）")
         if ctx.funnels:
             L.append("【漏斗】")
             for f in ctx.funnels:
@@ -266,4 +278,6 @@ def _reason(tool):
         "diagnose_funnel": "定位掉在漏斗哪一环",
         "monitor_scan": "滚动比对近期与前基线，找异常",
         "compliance_check": "复写前先记录原文违规项",
+        "draft_outreach_message": "给入选达人生成可直接发的邀约话术",
+        "compose_daily_report": "把今天的判断整理成能给主管看的日报",
     }.get(tool, "")

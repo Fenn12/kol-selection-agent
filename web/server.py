@@ -11,6 +11,10 @@
     GET  /api/overview?budget=8000   驾驶舱数据（销售结构 / 监测告警 / 复盘）
     POST /api/run                    跑一次 agent，返回 trace 与结论
     GET  /api/brief?ids=K001,K002    生成合作 brief（Markdown）
+    GET  /api/outreach?ids=K001      生成邀约话术（JSON，可直接复制）
+    GET  /api/report                 生成日报（Markdown）
+    POST /api/notify                 推送日报（默认 dry-run，落盘到 outbox/）
+    GET  /api/datasource             当前数据源
 """
 
 import json
@@ -24,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from agent import llm, planner, runner, tools_extra  # noqa: E402
+from agent import datasource, llm, notify, planner, runner, tools_extra  # noqa: E402
 from agent.core import parse_product_sales  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
@@ -73,6 +77,7 @@ def overview(budget=8000.0):
         "todos": todos[:8],
         "budget": budget,
         "llm": llm.available(),
+        "datasource": datasource.describe(),
     }
 
 
@@ -163,6 +168,24 @@ class Handler(BaseHTTPRequestHandler):
                                     if b.get("content"))
             return self._send(200, md, "text/markdown; charset=utf-8")
 
+        if path == "/api/outreach":
+            ids = [x for x in qs.get("ids", [""])[0].split(",") if x]
+            if not ids:
+                return self._json({"error": "缺少 ids"}, 400)
+            return self._json(tools_extra.draft_outreach_message(
+                ids, channel=qs.get("channel", ["私信"])[0]))
+
+        if path == "/api/report":
+            try:
+                b = float(qs.get("budget", ["8000"])[0])
+            except ValueError:
+                b = 8000.0
+            rep = tools_extra.compose_daily_report(budget=b)
+            return self._send(200, rep["markdown"], "text/markdown; charset=utf-8")
+
+        if path == "/api/datasource":
+            return self._json(datasource.describe())
+
         if path == "/api/export":
             with LAST["lock"]:
                 rec = LAST["rec"]
@@ -178,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path != "/api/run":
+        if parsed.path not in ("/api/run", "/api/notify"):
             return self._json({"error": "not found"}, 404)
 
         length = int(self.headers.get("Content-Length") or 0)
@@ -194,11 +217,19 @@ class Handler(BaseHTTPRequestHandler):
             budget = 8000.0
         planner_name = payload.get("planner") or ("llm" if llm.available() else "rule")
 
-        try:
-            rec = run_agent(goal, budget, planner_name)
-            return self._json(rec)
-        except Exception as e:
-            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+        if parsed.path == "/api/run":
+            try:
+                rec = run_agent(goal, budget, planner_name)
+                return self._json(rec)
+            except Exception as e:
+                return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+        if parsed.path == "/api/notify":
+            rep = tools_extra.compose_daily_report(budget=budget)
+            res = notify.send(f"[投放监测] P0 {rep['p0']} / P1 {rep['p1']}",
+                              rep["markdown"],
+                              dry_run=True if payload.get("dry_run", True) else None)
+            return self._json(res)
 
     # ---------- 静态文件 ----------
 

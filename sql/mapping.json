@@ -1,0 +1,84 @@
+{
+  "_readme": [
+    "接入企业数据库只需要改这个文件 + 两个环境变量，不用碰业务代码。",
+    "1) queries: 换成你自己库里的 SQL，保证输出列包含下面 columns 里需要的字段；",
+    "2) columns: 如果列名和本仓库不一致，在左侧写你的列名、右侧写标准名；",
+    "3) 环境变量：KOL_DATASOURCE=sql，KOL_DB_URL=mysql://user:pass@host:3306/db",
+    "   或 KOL_DB_MODULE=你的模块（该模块需暴露 connect() 返回 DB-API 连接）。",
+    "想看最小可跑示例：python scripts/build_sqlite_demo.py，然后",
+    "   KOL_DATASOURCE=sql  KOL_DB_URL=sqlite:///data/demo.db  python run_agent.py ..."
+  ],
+
+  "queries": {
+    "product_sales": "SELECT * FROM product_sales_daily ORDER BY 日期",
+    "candidates": "SELECT * FROM dim_kol WHERE status = 'active'",
+    "campaign": "SELECT * FROM fact_kol_daily ORDER BY dt",
+    "content_samples": "SELECT * FROM dim_content_sample ORDER BY id"
+  },
+
+  "columns": {
+  },
+
+  "_columns_example": {
+    "_说明": "下面这段是示例格式，实际使用时把字段名换成你的。注意：值必须能通过 parse_range 解析（如 '5000-1w' 或数字）。",
+    "product_sales": {
+      "stat_date": "日期",
+      "pay_amt": "销售额",
+      "qty": "销量",
+      "live_qty": "直播销量",
+      "video_qty": "视频销量",
+      "card_qty": "商品卡销量",
+      "pv": "浏览量",
+      "orders": "订单量",
+      "cvr": "转化率",
+      "n_creator": "带货达人",
+      "n_creator_video": "视频带货达人",
+      "n_creator_live": "直播带货达人",
+      "n_video": "带货视频",
+      "n_live": "带货直播"
+    },
+    "candidates": {
+      "kol_id": "达人ID",
+      "handle": "达人昵称",
+      "platform": "平台",
+      "category": "内容方向",
+      "content_category": "内容类目",
+      "followers": "粉丝数",
+      "price_band": "价格带",
+      "audience_age": "粉丝年龄段",
+      "audience_city": "粉丝城市层级",
+      "engagement_rate": "互动率",
+      "viral_rate": "爆文率",
+      "comment_intent": "购买意向评论占比",
+      "post_stability": "更新波动率",
+      "exposure_30d": "近30天曝光",
+      "store_uv_30d": "近30天进店UV",
+      "orders_30d": "近30天成交单量",
+      "aov": "客单价",
+      "quote": "报价",
+      "fulfill_rate": "履约率",
+      "repurchase_rate": "复购率",
+      "past_collab_footcare": "是否做过足部品类"
+    },
+    "campaign": {
+      "dt": "日期",
+      "kol_id": "达人ID",
+      "content_type": "内容形式",
+      "tier": "达人层级",
+      "impressions": "曝光",
+      "clicks": "点击",
+      "store_uv": "进店UV",
+      "orders": "成交单量",
+      "gmv": "成交金额",
+      "spend": "花费",
+      "aov": "客单价"
+    },
+    "content_samples": {
+      "id": "样本ID",
+      "platform": "平台",
+      "title": "标题",
+      "body": "正文",
+      "problem": "问题标注"
+    }
+  }
+}

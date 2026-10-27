@@ -1,8 +1,10 @@
 traces/
 eval/_traces/
+outbox/
+logs/
+data/demo.db
 __pycache__/
 *.py[cod]
 .venv/
-.DS_Store
 .env
-logs/
+.DS_Store
