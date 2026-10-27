@@ -41,6 +41,11 @@
         <span>大模型规划 <small id="llmState">（未检测到 key）</small></span></label>
     </div>
 
+    <div style="display:flex;gap:6px;margin-top:10px">
+      <button class="btn-s" id="llmTest" style="flex:1;padding:6px 8px">测试 AI 连接</button>
+    </div>
+    <div class="hint" id="llmInfo" style="margin-top:7px">检测中…</div>
+
     <button class="run" id="runBtn">运行</button>
     <div class="hint" id="hintText">选一个常用指令，或直接运行当前目标。<br>所有数字来自本地工具计算，不走模型。</div>
   </aside>
@@ -117,8 +122,11 @@
     </div>
 
     <div class="card" id="traceCard" style="display:none">
-      <div class="card-h"><h2>执行轨迹</h2><div class="meta">每步可核对，防止模型编数</div></div>
-      <div class="card-b"><div class="trace" id="trace"></div></div>
+      <div class="card-h"><h2>执行轨迹</h2><div class="meta" id="traceMeta">每步可核对，防止模型编数</div></div>
+      <div class="card-b">
+        <div id="planBox" style="display:none;margin-bottom:12px"></div>
+        <div class="trace" id="trace"></div>
+      </div>
     </div>
   </main>
 </div>

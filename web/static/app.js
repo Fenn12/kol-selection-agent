@@ -29,7 +29,7 @@ function renderChips() {
   const o = OVERVIEW || {};
   const llmOn = !!o.llm;
   $('#chips').innerHTML = [
-    `<span class="chip ${llmOn ? 'on' : ''}">${llmOn ? '大模型已就绪' : '离线规则模式'}</span>`,
+    `<span class="chip ${llmOn ? 'on' : ''}">${llmOn ? 'AI 模式 · ' + esc(o.model || 'llm') : '离线规则模式（未配置 key）'}</span>`,
     `<span class="chip">扫描 ${o.monitor?.scanned ?? '—'} 位达人</span>`,
     `<span class="chip">窗口 ${o.monitor?.window?.recent_days ?? 3} 天 / 基线 ${o.monitor?.window?.baseline_days ?? 7} 天</span>`,
     `<span class="chip">数据源 ${esc(o.datasource?.source ?? 'csv')}</span>`,
@@ -155,6 +155,41 @@ async function runAgent(goal) {
   }
 }
 
+async function loadLLMStatus() {
+  try {
+    const r = await fetch('/api/llm/status');
+    const d = await r.json();
+    const el = $('#llmInfo');
+    if (d.available) {
+      el.innerHTML = `<span style="color:var(--olive)">● AI 已连接</span> · ${esc(d.model)}`;
+      $('#llmState').textContent = '（已检测到 key）';
+    } else {
+      el.innerHTML = `<span style="color:var(--amber)">● 未配置 key</span> · 当前走离线规则<br>`
+        + `在项目根目录 .env 里填 DEEPSEEK_API_KEY`;
+      $('#llmState').textContent = '（未检测到 key）';
+    }
+    $('#llmTest').onclick = async () => {
+      const b = $('#llmTest');
+      b.disabled = true; b.textContent = '测试中…';
+      try {
+        const rr = await fetch('/api/llm/test', { method: 'POST' });
+        const dd = await rr.json();
+        if (dd.ok) {
+          el.innerHTML = `<span style="color:var(--olive)">● 连接正常</span> · ${esc(dd.model)} · ${dd.latency_ms}ms`;
+        } else {
+          el.innerHTML = `<span style="color:var(--p0)">● 失败</span> ${esc(dd.error || '')}`;
+        }
+      } catch (e) {
+        el.innerHTML = `<span style="color:var(--p0)">● 失败</span> ${esc(e.message)}`;
+      } finally {
+        b.disabled = false; b.textContent = '测试 AI 连接';
+      }
+    };
+  } catch (e) {
+    $('#llmInfo').textContent = '状态获取失败';
+  }
+}
+
 function renderResult(rec) {
   const v = rec.view || {};
   const parts = [];
@@ -240,8 +275,20 @@ function renderResult(rec) {
   }
 
   $('#result').innerHTML = parts.join('');
-  $('#resultMeta').textContent = `${rec.planner} · ${rec.steps} 步 · ${rec.elapsed_ms}ms`
+  const m = rec.agent_meta || {};
+  $('#resultMeta').textContent = `${rec.planner}${m.model ? ' · ' + m.model : ''} · ${rec.steps} 步 · ${rec.elapsed_ms}ms`
+    + (m.tokens ? ` · ${m.tokens} tokens` : '')
     + (rec.stopped_early ? ' · 中途终止' : '');
+
+  if (m.plan && m.plan.length) {
+    $('#planBox').style.display = '';
+    $('#planBox').innerHTML = `<div style="font-size:11.5px;color:var(--muted);margin-bottom:5px">模型自己定的计划</div>`
+      + `<ol style="margin:0;padding-left:18px;font-size:12.5px;color:var(--ink2);line-height:1.9">`
+      + m.plan.map((t) => `<li>${esc(t)}</li>`).join('') + `</ol>`;
+  } else {
+    $('#planBox').style.display = 'none';
+  }
+  $('#traceMeta').textContent = `${rec.planner === 'llm' ? '模型逐步决策，每步可核对' : '离线规则推进，每步可核对'}`;
 
   renderTrace(rec.trace || []);
   bindBriefButtons();
@@ -453,4 +500,5 @@ function renderLeads(d) {
 
 bindLeadPool();
 bindReportActions();
+loadLLMStatus();
 loadOverview();
