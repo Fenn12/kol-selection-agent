@@ -19,7 +19,11 @@ import json
 import os
 import sys
 
+from agent import env as _env
 from agent import llm, planner, runner
+
+
+_env.load()
 
 
 def main():
@@ -50,6 +54,13 @@ def main():
     print(f"规划器：{rec['planner']} ｜ 步数：{rec['steps']} ｜ 耗时：{rec['elapsed_ms']}ms"
           + (" ｜ 中途终止" if rec["stopped_early"] else ""))
     print("=" * 78)
+
+    # agent 自己写的执行计划（LLM 规划器）/ 规则路由出的执行序列
+    plan = getattr(p, "plan_text", None) or getattr(p, "plan", None)
+    if plan:
+        print("\n执行计划")
+        for i, t in enumerate(plan, 1):
+            print(f"  {i}. {t}")
 
     if args.show_trace:
         for s in rec["trace"]:

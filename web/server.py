@@ -29,7 +29,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from agent import datasource, llm, notify, pipeline, planner, runner, tools_extra  # noqa: E402
+from agent import datasource, env, llm, notify, pipeline, planner, runner, tools_extra  # noqa: E402
+
+ENV_INFO = env.load()   # 启动时读 .env（不覆盖已存在的环境变量）
 from agent.core import parse_product_sales  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
@@ -82,12 +84,39 @@ def overview(budget=8000.0):
     }
 
 
+def _jsonable(obj):
+    """把不可序列化的内容（函数等）降级成字符串，保证 /api/run 永不因序列化失败。"""
+    try:
+        json.dumps(obj, ensure_ascii=False)
+        return obj
+    except TypeError:
+        if isinstance(obj, (list, tuple)):
+            return [_jsonable(x) for x in obj]
+        if isinstance(obj, dict):
+            return {str(k): _jsonable(v) for k, v in obj.items()}
+        return str(obj)
+
+
 def run_agent(goal, budget, planner_name):
+    # auto 必须解析成「有 key 就用模型」，否则默认永远走规则基线
+    if planner_name == "auto":
+        planner_name = "llm" if llm.available() else "rule"
     use_llm = planner_name == "llm" and llm.available()
     p = (planner.LLMPlanner() if use_llm
          else planner.RulePlanner(budget=budget))
     agent = runner.Agent(p, trace_dir=os.path.join(ROOT, "traces"))
     rec = agent.run(goal)
+
+    # 暴露 agent 的思考过程与用量（plan 只取纯文本版，避免把函数塞进 JSON）
+    rec["agent_meta"] = {
+        "planner": getattr(p, "name", "?"),
+        "model": llm._model() if use_llm else None,
+        "plan": _jsonable(getattr(p, "plan_text", None) or getattr(p, "plan", None)),
+        "tokens": getattr(p, "tokens", 0),
+        "steps": rec.get("steps"),
+        "llm_available": llm.available(),
+        "env_loaded": ENV_INFO.get("loaded", 0),
+    }
 
     # 补上前端要用的结构化视图
     ctx = agent.ctx
@@ -184,6 +213,17 @@ class Handler(BaseHTTPRequestHandler):
             rep = tools_extra.compose_daily_report(budget=b)
             return self._send(200, rep["markdown"], "text/markdown; charset=utf-8")
 
+        if path == "/api/llm/status":
+            u = llm.usage_summary()
+            return self._json({
+                "available": llm.available(),
+                "model": llm._model(),
+                "base_url": llm._base(),
+                "env_file": ENV_INFO.get("exists"),
+                "env_loaded": ENV_INFO.get("loaded", 0),
+                "usage": u,
+            })
+
         if path == "/api/datasource":
             return self._json(datasource.describe())
 
@@ -202,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path not in ("/api/run", "/api/notify", "/api/pipeline"):
+        if parsed.path not in ("/api/run", "/api/notify", "/api/pipeline", "/api/llm/test"):
             return self._json({"error": "not found"}, 404)
 
         length = int(self.headers.get("Content-Length") or 0)
@@ -224,6 +264,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(rec)
             except Exception as e:
                 return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+        if parsed.path == "/api/llm/test":
+            if not llm.available():
+                return self._json({"ok": False, "error": "未配置 DEEPSEEK_API_KEY（可写入项目根目录 .env）"}, 400)
+            import time as _t
+            t0 = _t.time()
+            try:
+                msg = llm.chat([{"role": "user", "content": "只回两个字：可用"}],
+                               temperature=0, max_tokens=16)
+                return self._json({"ok": True, "model": llm._model(),
+                                   "reply": (msg.get("content") or "").strip(),
+                                   "latency_ms": int((_t.time() - t0) * 1000),
+                                   "usage": llm.last_usage})
+            except Exception as e:
+                return self._json({"ok": False, "error": f"{type(e).__name__}: {e}"}, 502)
 
         if parsed.path == "/api/pipeline":
             text = payload.get("text") or ""
