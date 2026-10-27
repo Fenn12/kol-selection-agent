@@ -1,0 +1,6 @@
+traces/
+eval/_traces/
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
