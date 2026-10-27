@@ -34,63 +34,204 @@ SYSTEM = """你是电商投放的运营助手，覆盖四件事：达人筛选�
 
 
 # ------------------------------------------------------------
-# LLM 规划器
+# LLM 规划器（真正的 agent：先规划，再调工具，最后自查）
 # ------------------------------------------------------------
+
+PLAN_PROMPT = """先别动手。用 3–6 步写一个执行计划，告诉我你打算按什么顺序做、每步要拿到什么。
+
+输出 JSON：{"plan": ["步骤1", "步骤2"], "missing": ["还缺什么信息"]}
+只是计划，不要给答案。"""
+
+REFLECT_PROMPT = """停一下，自查再回答：
+1. 你结论里的每个数字，是否都能对应到某次工具返回？有没有自己估的？
+2. 有没有该查但没查的？比如没看销售结构就直接给名单、没跑监测就说一切正常。
+3. 有没有该拒绝而你没拒绝的？（预算不足、候选为空、数据缺失）
+如果发现问题，继续调用工具补齐；如果确认无误，直接输出最终答案。"""
+
+FINAL_FORMAT = """现在输出最终答案，读者是运营同学，不是我的内部记录。
+
+要求：
+1. 不要出现「上一轮」「修正说明」「我刚才说」「自查发现」这类自言自语——直接给结论。
+2. 结构：判断依据（带数字）→ 结论/名单 → 风险与待人工确认项。
+3. 关键数字标注来自哪个工具。
+4. 如果不同工具的同一指标口径不一致，直接说明你采用哪一套、为什么。
+5. 有做不到的地方就写明做不到，不要为了完整而凑。"""
+
 
 class LLMPlanner:
     name = "llm"
 
-    def __init__(self, max_steps=14):
-        self.max_steps = max_steps
+    def __init__(self, max_steps=16, token_budget=150000,
+                 obs_limit=2400, ctx_chars=40000):
         self.messages = [{"role": "system", "content": SYSTEM}]
+        self.max_steps = max_steps
+        self.token_budget = token_budget
+        self.obs_limit = obs_limit        # 单条观察回灌上限（chars）
+        self.ctx_chars = ctx_chars        # 触发上下文压缩的累计字符数
+        self.plan = None
+        self.tokens = 0
         self._n = 0
         self._repaired = set()
+        self._reflected = False
+        self._pending = []   # 同一条 assistant 消息里的多个 tool_call，逐个执行
+        self._acted_after_reflect = False   # 自检后又补查过 → 结论需要重新成稿
+        self._polished = False
+        self._model = llm._model()
 
     @staticmethod
     def available():
         return llm.available()
 
+    # ---------- 阶段一：先规划 ----------
+
+    def _make_plan(self, goal):
+        try:
+            data = llm.chat_json([
+                {"role": "system", "content": PLAN_PROMPT},
+                {"role": "user", "content": f"任务：{goal}\n可用工具：{'、'.join(t['name'] for t in registry.SCHEMAS)}"}],
+                temperature=0.2, max_tokens=500)
+            self.tokens += llm.last_usage.get("total_tokens", 0)
+            self.plan = data.get("plan") or []
+            return data
+        except llm.LLMError:
+            return {}
+
+    # ---------- 每步决策 ----------
+
     def next_action(self, goal, ctx):
+        # 上一条 assistant 消息里还有没执行的 tool_call —— 先把手头的做完。
+        # OpenAI/DeepSeek 要求每个 tool_call_id 都有对应 tool 回执，否则报 400。
+        if self._pending:
+            return self._pending.pop(0)
+
         self._n += 1
+
         if self._n == 1:
-            self.messages.append({"role": "user", "content": goal})
-        if self._n > self.max_steps:
-            return {"final": "达到最大步数上限，基于已知信息给出阶段性结论（可能不完整）。"}
+            planned = self._make_plan(goal)
+            hint = ""
+            if self.plan:
+                hint = "\n\n你的计划：\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(self.plan, 1))
+                if planned.get("missing"):
+                    hint += f"\n已知缺失：{'、'.join(map(str, planned['missing']))}"
+            self.messages.append({"role": "user", "content": goal + hint})
+
+        # 触顶时不能只丢一句占位话 —— 让它基于已有事实把结论说完
+        if self._n > self.max_steps or self.tokens > self.token_budget:
+            return self._wrap_up(
+                f"已达上限（步数 {self._n - 1}/{self.max_steps}，token {self.tokens}/{self.token_budget}），"
+                "不要再调用工具，直接基于上面已有的工具返回给出结论，并说明哪些地方可能不完整。")
+
+        self._compact()
 
         try:
             msg = llm.chat(self.messages, tools=registry.SCHEMAS, temperature=0.2, max_tokens=1500)
         except llm.LLMError as e:
             return {"final": f"模型调用失败：{e}"}
+        self.tokens += llm.last_usage.get("total_tokens", 0)
 
-        self.messages.append(msg)
         calls = msg.get("tool_calls") or []
         if not calls:
-            return {"final": (msg.get("content") or "").strip() or "（模型未给出结论）"}
+            # 想直接回答 —— 先让它自查一次
+            if not self._reflected and self._n < self.max_steps:
+                self._reflected = True
+                self.messages.append(msg)
+                self.messages.append({"role": "user", "content": REFLECT_PROMPT})
+                return self.next_action(goal, ctx)
+            draft = (msg.get("content") or "").strip() or "（模型未给出结论）"
+            # 自检后补查过的话，草稿里常混着「上一轮我怎么说的」这类自言自语，重新成稿
+            if self._acted_after_reflect:
+                draft = self._polish(draft)
+            return {"final": draft}
 
-        c = calls[0]
-        name = c["function"]["name"]
-        raw = c["function"].get("arguments") or "{}"
+        self.messages.append(msg)
+        thought = (msg.get("content") or "").strip()
+
+        actions = []
+        for i, c in enumerate(calls):
+            fn = c.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            actions.append({
+                "thought": thought if i == 0 else "（同一轮并行调用）",
+                "tool": fn.get("name"),
+                "args": args,
+                # 少数兼容实现不返回 id，兜底造一个，保证 tool 回执能对上
+                "call_id": c.get("id") or f"call_{self._n}_{i}",
+            })
+
+        if self._reflected:
+            self._acted_after_reflect = True
+
+        first, self._pending = actions[0], actions[1:]
+        return first
+
+    # ---------- 触顶收尾：把结论说完，而不是丢一句占位话 ----------
+
+    def _wrap_up(self, notice):
+        if getattr(self, "_wrapped", False):
+            return {"final": f"{notice}\n（收尾调用未返回内容，以下为已有信息。）"}
+        self._wrapped = True
+        self.messages.append({"role": "user", "content": notice})
         try:
-            args = json.loads(raw)
-        except json.JSONDecodeError:
-            args = {}
-        return {"thought": (msg.get("content") or "").strip(), "tool": name,
-                "args": args, "call_id": c["id"]}
+            # 不带 tools，强制它只能作答
+            msg = llm.chat(self.messages, temperature=0.2, max_tokens=1500)
+        except llm.LLMError as e:
+            return {"final": f"{notice}\n模型调用失败：{e}"}
+        self.tokens += llm.last_usage.get("total_tokens", 0)
+        return {"final": (msg.get("content") or "").strip() or notice}
+
+    # ---------- 终稿整理：去掉自言自语，按对外结构重排 ----------
+
+    def _polish(self, draft):
+        if self._polished:
+            return draft
+        self._polished = True
+        self.messages.append({"role": "assistant", "content": draft})
+        self.messages.append({"role": "user", "content": FINAL_FORMAT})
+        try:
+            msg = llm.chat(self.messages, temperature=0.2, max_tokens=1800)
+        except llm.LLMError:
+            return draft
+        self.tokens += llm.last_usage.get("total_tokens", 0)
+        return (msg.get("content") or "").strip() or draft
+
+    # ---------- 上下文压缩：防止长任务把窗口撑爆 ----------
+
+    def _compact(self):
+        total = sum(len(str(m.get("content") or "")) for m in self.messages)
+        if total <= self.ctx_chars:
+            return
+        # 最近 8 条保持完整，更早的 tool 回执压成摘要
+        keep = 8
+        idx = [i for i, m in enumerate(self.messages) if m.get("role") == "tool"]
+        for i in idx[:-keep]:
+            c = str(self.messages[i].get("content") or "")
+            if len(c) > 300:
+                self.messages[i]["content"] = c[:300] + "…（更早的回执已压缩，需要请重新调用该工具）"
 
     def observe(self, call_id, tool, obs):
         self.messages.append({"role": "tool", "tool_call_id": call_id,
-                              "content": json.dumps(obs, ensure_ascii=False)[:6000]})
+                              "content": json.dumps(obs, ensure_ascii=False)[:self.obs_limit]})
 
     def repair(self, call_id, tool, err):
-        """参数报错时把可接受的参数名告诉模型，允许重试一次。"""
         if (call_id, tool) in self._repaired:
             return False
         self._repaired.add((call_id, tool))
         self.messages.append({"role": "tool", "tool_call_id": call_id,
                               "content": json.dumps({"error": err}, ensure_ascii=False)})
+        # 同轮里没执行的调用也要补回执，否则下一次请求会因缺 tool 消息被拒
+        self._flush_pending("因同轮调用报错而中止")
         self.messages.append({"role": "user", "content":
             f"上一次调用 {tool} 的参数不合法。可接受参数：{err.get('accepted')}。请修正后重试。"})
         return True
+
+    def _flush_pending(self, note):
+        for a in self._pending:
+            self.messages.append({"role": "tool", "tool_call_id": a["call_id"],
+                                  "content": json.dumps({"skipped": note}, ensure_ascii=False)})
+        self._pending = []
 
 
 # ------------------------------------------------------------
@@ -123,7 +264,8 @@ class RulePlanner:
         self.top_n = top_n
         self.sales_path = sales_path
         self.search_kwargs = search_kwargs or {}
-        self.plan = None
+        self.plan = None          # 内部执行序列（含取值函数，不可序列化）
+        self.plan_text = None     # 对外展示的执行计划（纯文本）
         self.i = 0
 
     def _build(self, goal):
@@ -171,6 +313,7 @@ class RulePlanner:
     def next_action(self, goal, ctx):
         if self.plan is None:
             self.plan = self._build(goal)
+            self.plan_text = [f"{t}：{_reason(t)}" for t, _ in self.plan]
         if self.i >= len(self.plan):
             return {"final": self._summary(ctx, goal)}
 

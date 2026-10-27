@@ -21,6 +21,9 @@ DEFAULT_MODEL = os.getenv("MODEL") or "deepseek-chat"
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 
+# 最近一次调用的用量，供规划器累计 token 预算
+last_usage = {}
+
 
 class LLMError(RuntimeError):
     pass
@@ -75,6 +78,13 @@ def chat(messages, tools=None, json_mode=False, temperature=0.3,
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 data = json.loads(r.read().decode("utf-8"))
             usage = data.get("usage", {})
+            last_usage.clear()
+            last_usage.update({
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens")
+                                or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)),
+            })
             _log({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": _model(),
                   "latency_ms": int((time.time() - t0) * 1000),
                   "prompt_tokens": usage.get("prompt_tokens"),
