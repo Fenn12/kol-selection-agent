@@ -69,8 +69,8 @@ def main():
     print(f"已生成 {DB}")
     print(f"  product_sales_daily {n1} 行 ｜ dim_kol {n2} 行 ｜ fact_kol_daily {n3} 行 ｜ content_sample {n4} 行")
     print("验证：")
-    print("  KOL_DATASOURCE=sql KOL_DB_URL=sqlite:///data/demo.db python -c "
-          "\"from agent import datasource;print(datasource.describe())\"")
+    print("  KOL_DATASOURCE=sql KOL_DB_URL=sqlite:///data/demo.db \\")
+    print("    python -c \"from agent import datasource; print(datasource.describe())\"")
 
 
 if __name__ == "__main__":

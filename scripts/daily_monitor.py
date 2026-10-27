@@ -29,7 +29,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
+from agent import env as _env
 from agent import datasource, notify, tools_extra  # noqa: E402
+
+
+_env.load()
 
 
 def main():
