@@ -1,8 +1,10 @@
-# KOL Selection Agent
+# KOL Operations Agent
 
-> **English abstract** — A tool-using agent that turns a product's sales-distribution export into an executable KOL outreach plan. It parses platform exports where every metric is a **range** (`5000-1w`, `5%-10%`), derives channel structure and per-creator efficiency, screens a candidate pool on four dimensions, then allocates budget by value-for-money — and **refuses** when budget is short, candidates are empty, or data is missing. Includes a 6-task behavioural eval.
+> **English abstract** — A tool-using agent covering the full creator-marketing loop: creator selection → outreach brief → content rewriting → performance review → live monitoring. Twelve tools, two planners (LLM function-calling / offline rule baseline), and a guard layer that makes the agent **refuse** instead of fabricate when data is missing, budget is short, or candidates are empty. Nine behavioural evals.
 
-给它一张商品销售分布表和一个预算，它输出一份可执行的达人投放名单；条件不满足时它会说「做不了」，而不是编一份名单。
+一个覆盖「达人筛选 → 合作 brief → 内容复写 → 数据复盘 → 投放监测」的运营 Agent。
+
+它最重要的特性不是能做什么，而是**做不了的时候会说做不了**。
 
 ---
 
@@ -10,38 +12,50 @@
 
 | 项 | 说明 |
 |---|---|
-| 商品销售表 | **列结构照抖音电商罗盘「商品详情-销售分布」导出格式**，数值为合成 |
-| 候选达人池 | 60 位，全部合成 |
-| 真实文件可用 | 解析器支持该导出格式的 `.xls`，把 `--sales` 指向你自己的文件即可 |
+| 商品销售表 | 列结构照抖音电商罗盘「商品详情-销售分布」导出格式，**数值为合成** |
+| 候选达人池 | 60 位，合成 |
+| 投放执行数据 | 12 位达人 × 14 天，合成；刻意埋了两类异常用于演示监测 |
+| 真实文件可用 | 解析器支持该导出格式的 `.xls`，`--sales` 指向你的文件即可 |
 | 未使用 | 任何公司内部经营数据、真实达人信息或投放策略 |
 
-**为什么要强调这一点**：这份导出有个坑——**所有指标都是区间**（`销量 5000-1w`、`转化率 5%-10%`）。直接 `float()` 会崩，取中点又会让误差叠加。这个仓库把这件事当成一等问题处理（见下文）。真实表结构 + 合成数值，既保住了方法真实性，又不泄露业务数据。
+**这份导出有个真坑**：所有指标都是区间值（`销量 5000-1w`、`转化率 5%-10%`）。`float()` 直接崩，取中点又会让误差叠加——所以 `parse_range()` 和「客单价置信度」是这个项目的一等公民，不是附属功能。
 
 ---
 
-## 它到底做了什麼
+## 四类能力
+
+### A. 达人筛选与合作
 
 ```
-商品销售分布 (.xls/.csv)
-        │
-        ▼
-[1] parse_product_sales   解析区间值 → 渠道结构 / 人均产出 / 客单价(带置信度)
-        │
-        ▼
-[2] build_brief           主推打法 / 达人类型配比 / 价格带 / 内容红线
-        │
-        ▼
-[3] search_candidates     按平台·粉丝量·报价·是否做过该品类检索
-        │
-        ▼
-[4] score_candidates      匹配度30 / 内容25 / 转化30 / 成本15 → S/A/B/C
-        │
-        ▼
-[5] allocate_budget       按性价比在预算内选人；不够就明确拒绝
-        │
-        ▼
-    名单 + 理由 + 预算使用情况（全程 trace 落盘）
+parse_product_sales → build_brief → search_candidates → score_candidates → allocate_budget
+                                                    ↓
+                              negotiation_advice（对比同池 CPM 中位，判断要不要压价）
+                              draft_collab_brief（合作 brief：必现要素 / 禁止事项 / 交付要求）
 ```
+
+评分四维：匹配度 30 / 内容 25 / 转化 30 / 成本 15，批内分位归一化 → S/A/B/C。
+
+### B. 内容复写
+
+先 `compliance_check` 原文，再 `rewrite_content`，最后再 check 一次，**前后两次结果都要报**。
+
+改写约束写死在 system prompt 里：删医疗功效、钩子落具体场景、三段推进、软引导、按平台控字数（小红书 300–500 / 抖音 80–150 / 视频号 120–200）。
+
+### C. 数据复盘
+
+`review_campaign` 按内容类型 / 达人层级 / 单达人聚合 ROI、CTR、CVR、CPM，给出最好与最差分组。
+`diagnose_funnel` 把单达人变化拆到 **曝光 / 点击率 / 转化率 / 客单价** 四环，指出掉在哪、该查什么。
+
+### D. 投放监测
+
+`monitor_scan` 滚动比对「近 3 天 vs 前 7 天」，命中规则即告警：
+
+| 规则 | 阈值 | 级别 |
+|---|---|---|
+| 转化骤降 | −30% | P0 |
+| 曝光腰斩 | −45% | P0 |
+| 曝光异常飙升 | +50% 且转化未跟上 | P1 |
+| CPM 飙升 | +40% | P1 |
 
 ---
 
@@ -51,100 +65,75 @@
 git clone https://github.com/Fenn12/kol-selection-agent.git
 cd kol-selection-agent
 
-# 离线基线，无需 API key
-python run_agent.py --task "指压板新品起量" --budget 8000
+# 离线基线（无需 key，四类能力都能跑）
+python run_agent.py --goal "全流程跑一遍：指压板新品起量，预算 8000"
+python run_agent.py --goal "把这波投放复盘一下"
+python run_agent.py --goal "监测一下有没有异常"
+python run_agent.py --goal "把这几条文案改写一版"
 
-# Agent 行为评测（6 条）
+# 行为评测
 python eval/run_eval.py
-
-# 用自己的真实导出文件（.xls 需 pip install xlrd==1.2.0）
-python run_agent.py --sales "D:/你的导出.xls" --budget 8000
 ```
 
-无第三方依赖（仅标准库）。接模型时任一 OpenAI 兼容接口均可：
+接模型（DeepSeek / 任一 OpenAI 兼容接口）：
 
 ```bash
-export OPENAI_API_KEY=sk-xxx
-export OPENAI_BASE_URL=https://api.openai.com/v1
-python run_agent.py --budget 8000 --planner llm
+export DEEPSEEK_API_KEY=sk-xxx
+export DEEPSEEK_BASE_URL=https://api.deepseek.com/v1   # 可选
+export MODEL=deepseek-chat                              # 可选
+python run_agent.py --goal "..." --planner llm
+python eval/run_eval.py --planner llm
 ```
 
+零第三方依赖，只用标准库（`urllib` 直连，不引 openai 包）。
+
 ---
 
-## 两个规划器，一套护栏
+## 三个设计决定
 
-| | `LLMPlanner` | `ScriptedPlanner` |
+### 1. 能算的用代码，要写的用模型
+
+评分、ROI、异常判定全部是确定性代码，**模型不能改数**；只有 brief 与文案走模型。这样即便模型幻觉，也不会把 1.8 的 ROI 说成 3.5。
+
+代价是灵活性下降——模型不能"灵活地重新定义指标"。这个取舍是故意的。
+
+### 2. 监测基线用中位数，不用均值
+
+异常期一旦被算进基线，均值会被自己稀释：曝光翻倍的那几天把基线抬高，导致「涨幅不够」而漏报。
+
+实测中同一份数据，均值基线漏掉了「曝光 +58.7% 但转化 −56%」这个组合，改中位数后命中。**这条是跑出来才发现的，不是设计时想到的。**
+
+### 3. 护栏分两级
+
+| 级别 | 触发 | 行为 |
 |---|---|---|
-| 谁决定调哪个工具 | 模型（function calling） | 固定顺序，参数取自上一步观察 |
-| 用途 | 真实 agent | 离线基线 / 评测对照组 |
-| 是否需要 key | 是 | 否 |
-
-**两者共用同一套工具和同一套 `guard()` 护栏**——遇到报错、空池、预算不足一律停下。这样即使模型想硬凑，也过不了护栏。
-
-> 实测状态说明：`ScriptedPlanner` 路径有 6/6 自动化测试覆盖；`LLMPlanner` 代码已实现，但**未纳入本仓库的自动化测试**（需要 API key）。这条写在这里，不藏在脚注。
-
----
-
-## 三个真实的坑（都在这份代码里处理了）
-
-### 1. 区间值不能直接算
-
-平台导出里 `销量=5000-1w`、`转化率=5%-10%`。`float()` 会直接报错；强行取中点会让下游指标系统性失真。
-
-`parse_range()` 处理了 `0-250` / `5000-1w` / `10w-25w` / `5%-10%` 四种形态，并把「取中值」这件事显式标注在返回值里。
-
-### 2. 客单价由两个区间相除，误差会放大
-
-`客单价 = 销售额中值 / 销量中值` —— 两个 ±50% 的区间相除，结果可能偏得很远。
-
-代码里给客单价加了**置信度**（由两个区间的相对宽度算出）。置信度低时，**不拿它当硬筛选条件**，否则会把候选池筛空。样例数据跑出来客单价 23.3 元、置信度「低」，于是 agent 选择「不锁价格带，只要求品类经验」——这是一个真实的判断，不是配置。
-
-### 3. 预算是硬约束，不是建议
-
-预算低于最低报价时，`allocate_budget` 返回 `feasible: false` 并给出最低预算要求，而不是「挑几个最便宜的凑一凑」。同理，预算只用掉 30% 时会提示原因（池子里便宜的好达人已选完），而不是假装任务完成。
+| BLOCK | 工具报错 / 候选池为空 / 预算不可行 / 数据缺失 | 立即停，输出原因与替代方向 |
+| WARN | 复写后仍违规 / 高风险工具被调用 / 无告警 | 继续跑，但写进结论的「风险与待确认」 |
 
 ---
 
 ## Agent 行为评测
 
-`eval/tasks.json` 里 6 条任务，全部是**行为断言**，不看文案质量：
+`eval/tasks.json` 里 9 条任务，全部是行为断言：
 
 | ID | 测什么 |
 |---|---|
-| T1 | 正常场景能给出可执行名单 |
-| T2 | 预算低于最低报价时必须拒绝，不许硬凑 |
-| T3 | 筛选条件无法满足时说明原因并给替代方向 |
-| T4 | 数据文件缺失时第一步就停，不许用默认值编数据 |
-| T5 | 同输入两次运行结论完全一致 |
-| T6 | 工具调用顺序合法，不许跳步直接给名单 |
+| T1 | 选人链路完整，工具顺序正确 |
+| T2 | 预算低于最低报价时拒绝 |
+| T3 | 筛选条件无法满足时说明原因 |
+| T4 | 数据文件缺失时第一步就停 |
+| T5 | 复盘给出整体 ROI 与最好/最差分组 |
+| T6 | 监测命中「转化骤降」与「曝光异常飙升」 |
+| T7 | 3 条样本复写后合规问题清零 |
+| T8 | 四类能力串跑不中途终止 |
+| T9 | 同输入两次运行结论一致 |
 
 ```bash
 $ python eval/run_eval.py
-通过 6/6 = 100%
+通过 9/9 = 100%
 ```
 
-**为什么这样设计**：一个能说会道但会编造达人的 agent，比一个说话笨拙但会拒绝的 agent 危险得多。内容质量可以人工兜底，行为错误不行。
-
----
-
-## Trace：每一步都留痕
-
-每次运行会把完整 trace 写到 `traces/*.json`：
-
-```json
-{
-  "task": "指压板新品起量",
-  "planner": "scripted",
-  "steps": 5,
-  "trace": [
-    {"step": 1, "thought": "...", "tool": "parse_product_sales",
-     "args": {}, "elapsed_ms": 2, "observation": {"销售额_中值": 175000, "...": "..."}}
-  ],
-  "final": "..."
-}
-```
-
-面试时可以直接按 trace 回放：每步为什么这么走、看到了什么、在哪一步决定停。
+**这不是模型效果指标**，是行为断言通过率。区别写在这里，免得被误读。
 
 ---
 
@@ -152,27 +141,31 @@ $ python eval/run_eval.py
 
 ```
 kol-selection-agent/
-├── run_agent.py            # CLI 入口
+├── run_agent.py            # CLI
 ├── agent/
-│   ├── core.py             # 区间解析 + 5 个工具 + 评分 + 预算分配
-│   └── loop.py             # 两个规划器 + 护栏 + trace
-├── data/
-│   ├── product_sales.sample.csv   # 列结构照真实导出，数值合成
-│   └── candidates.csv             # 60 位合成达人
-└── eval/
-    ├── tasks.json          # 6 条行为任务
-    └── run_eval.py         # 评测执行器
+│   ├── llm.py              # OpenAI 兼容客户端：重试 / JSON / token 记账
+│   ├── core.py             # 区间解析、商品简报、评分、预算分配
+│   ├── tools_extra.py      # 合作 brief、谈判、复写、复盘、监测
+│   ├── registry.py         # 12 个工具的 schema 与 handler
+│   ├── planner.py          # LLM 规划器 + 离线规则规划器
+│   └── runner.py           # 执行、护栏、trace
+├── data/                   # 全部合成：销售分布 / 候选池 / 投放数据 / 待复写样本
+├── eval/                   # 9 条行为评测
+└── logs/                   # token 记账（gitignore）
 ```
+
+每次运行会把 trace 写到 `traces/*.json`，可逐步回放。
 
 ---
 
 ## 已知局限
 
-1. **LLM 规划器未做端到端测试**：只验证了离线基线。接模型后需要重新跑一遍 `eval/run_eval.py`，并把 `planner` 换成 llm 做对照。
-2. **评分维度偏数据、不看内容**：达人的内容质量只用了互动率、爆文率等代理指标，没有做内容语义判断。
-3. **候选池只有 60 人**：分位归一化在小样本下排序不稳定，真实使用应扩大到百人以上。
-4. **未接平台 API**：达人数据需人工导入，没有做实时拉取与报价校准。
-5. **合规只覆盖硬红线**：禁用词与功效表述有拦截，但内容创意层面的合规仍需人工终审。
+1. **LLM 规划器未做端到端验证**：本仓库的自动化测试只覆盖离线规则规划器。接入 key 后请先跑 `eval/run_eval.py --planner llm` 做对照，再用于生产。
+2. **离线规划的意图识别是关键词匹配**：复合指令（如"先复盘再改文案"）可能识别不全。
+3. **候选池仅 60 人**：分位归一化在小样本下排序不稳，真实使用应扩到百人以上。
+4. **评分不含内容语义**：内容质量用互动率、爆文率等代理指标，没做语义理解。
+5. **监测阈值未经真实数据校准**：50% / 30% 这些数字来自经验，换品类需重标。
+6. **未接平台 API**：达人数据与投放数据均需手动导入。
 
 ---
 
