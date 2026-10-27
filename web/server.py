@@ -15,6 +15,7 @@
     GET  /api/report                 生成日报（Markdown）
     POST /api/notify                 推送日报（默认 dry-run，落盘到 outbox/）
     GET  /api/datasource             当前数据源
+    POST /api/pipeline               企微消息 → 线索 → 评分 → 飞书 → 待发队列
 """
 
 import json
@@ -28,7 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from agent import datasource, llm, notify, planner, runner, tools_extra  # noqa: E402
+from agent import datasource, llm, notify, pipeline, planner, runner, tools_extra  # noqa: E402
 from agent.core import parse_product_sales  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
@@ -201,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path not in ("/api/run", "/api/notify"):
+        if parsed.path not in ("/api/run", "/api/notify", "/api/pipeline"):
             return self._json({"error": "not found"}, 404)
 
         length = int(self.headers.get("Content-Length") or 0)
@@ -221,6 +222,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 rec = run_agent(goal, budget, planner_name)
                 return self._json(rec)
+            except Exception as e:
+                return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+        if parsed.path == "/api/pipeline":
+            text = payload.get("text") or ""
+            if not text.strip():
+                return self._json({"error": "text 为空：请粘贴群消息或回调内容"}, 400)
+            try:
+                res = pipeline.run_pipeline(
+                    [text],
+                    min_tier=payload.get("min_tier", "A"),
+                    write=bool(payload.get("write", True)),
+                    push=bool(payload.get("push", False)))
+                if res["outreach_queue"]:
+                    res["queue_path"] = pipeline.save_queue(res["outreach_queue"])
+                return self._json(res)
             except Exception as e:
                 return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 

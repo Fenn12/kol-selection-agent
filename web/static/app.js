@@ -369,5 +369,88 @@ $('#runBtn').onclick = () => {
 
 $('#budget').onchange = loadOverview;
 
+function bindLeadPool() {
+  const ta = $('#leadText');
+  $('#leadSample').onclick = () => {
+    ta.value = '抖音号：jiuzuo2024 粉丝 12.3w，做久坐缓解的\n'
+      + '小红书号：aijiankang_xhs 主页 https://www.xiaohongshu.com/user/profile/5f8a2b1c\n'
+      + '还有 v.douyin.com/iRxT9kQ 粉丝4.5万';
+  };
+
+  $('#leadRun').onclick = async () => {
+    const text = (ta.value || '').trim();
+    if (!text) { $('#leadMeta').textContent = '先粘贴内容或点「填入示例」'; return; }
+    const btn = $('#leadRun');
+    btn.disabled = true; btn.textContent = '解析中…';
+    $('#leadMeta').textContent = '';
+    try {
+      const r = await fetch('/api/pipeline', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, write: true, push: false }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      renderLeads(d);
+    } catch (e) {
+      $('#leadResult').innerHTML = `<div class="empty">失败：${esc(e.message)}</div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = '解析并入库';
+    }
+  };
+}
+
+function renderLeads(d) {
+  const leads = d.leads || [];
+  const w = d.write_result || {};
+  $('#leadMeta').textContent =
+    `抽到 ${d.accounts_found} 个账号 · 评分 ${d.scored} 条 · 高匹配 ${(d.outreach_queue||[]).length} 条 · `
+    + `写入 ${w.mode}${w.path ? '（' + w.path.split(/[\\/]/).pop() + '）' : ''} · 画像来源 ${d.provider}`;
+
+  if (!leads.length) {
+    $('#leadResult').innerHTML = '<div class="empty">没有从这段内容里识别到账号 ID。格式需包含「抖音号：」「小红书号：」或主页链接。</div>';
+    return;
+  }
+
+  const rows = leads.map((l) => `<tr>
+      <td>${esc(l.platform)}</td>
+      <td><b>${esc(l.account_id)}</b></td>
+      <td>${esc(l.handle || '')}</td>
+      <td>${esc(l.category || '')} / ${esc(l.style || '')}</td>
+      <td class="num">${(l.followers || 0).toLocaleString()}</td>
+      <td class="num">${l.score}</td>
+      <td><span class="tier ${esc(l.tier)}">${esc(l.tier)}</span></td>
+      <td style="font-size:11.5px;color:var(--muted);max-width:220px">${esc(l.breakdown || '')}</td>
+      <td style="font-size:11.5px">${esc(l.action || '')}</td>
+    </tr>`).join('');
+
+  let extra = '';
+  if ((d.outreach_queue || []).length) {
+    extra = `<div style="margin-top:12px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">待发队列（需人工确认后发送）</div>`
+      + d.outreach_queue.map((q, i) => `<div class="rw">
+          <div class="rw-h"><b>${esc(q.lead.handle || q.lead.account_id)}</b>
+            <span class="chip">${esc(q.lead.tier)} · ${q.lead.score}</span>
+            <button class="btn-s" data-copyq="${i}">复制话术</button></div>
+          <div class="rw-b">${esc(q.outreach.body)}</div>
+          <div class="rw-m">货盘：${q.outreach.pack.map((p) => `${p.sku} ¥${p.price}/${Math.round(p.commission*100)}%`).join('　')}</div>
+        </div>`).join('') + '</div>';
+  }
+
+  $('#leadResult').innerHTML = `<table><thead><tr>
+      <th>平台</th><th>账号</th><th>昵称</th><th>方向/风格</th><th>粉丝</th>
+      <th>匹配分</th><th>分层</th><th>风格拆解</th><th>建议动作</th>
+    </tr></thead><tbody>${rows}</tbody></table>${extra}`;
+
+  document.querySelectorAll('[data-copyq]').forEach((b) => {
+    b.onclick = async () => {
+      const q = d.outreach_queue[Number(b.getAttribute('data-copyq'))];
+      await navigator.clipboard.writeText(`${q.outreach.body}\n\n（${(q.outreach.tips||[]).join('；')}）`);
+      b.textContent = '已复制';
+      setTimeout(() => { b.textContent = '复制话术'; }, 1500);
+    };
+  });
+}
+
+bindLeadPool();
 bindReportActions();
 loadOverview();

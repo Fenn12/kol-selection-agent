@@ -67,6 +67,24 @@
       <div class="card-b" id="todos"><div class="empty">加载中…</div></div>
     </div>
 
+    <div class="card">
+      <div class="card-h">
+        <h2>线索池（来自群消息）</h2>
+        <div class="meta">粘贴聊天内容 → 自动抽号、补画像、四维评分</div>
+      </div>
+      <div class="card-b">
+        <textarea id="leadText" placeholder="粘贴企微群消息，例如：&#10;抖音号：jiuzuo2024 粉丝 12.3w，做久坐缓解的&#10;小红书号：aijiankang_xhs 主页 xiaohongshu.com/user/profile/5f8a2b1c"
+          style="width:100%;height:76px;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+                 font-family:inherit;font-size:12.5px;resize:vertical;background:#fff;color:var(--ink)"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+          <button class="btn-s" id="leadRun" style="padding:6px 12px">解析并入库</button>
+          <button class="btn-s" id="leadSample">填入示例</button>
+          <span class="meta" id="leadMeta"></span>
+        </div>
+        <div id="leadResult" style="margin-top:12px"></div>
+      </div>
+    </div>
+
     <div class="grid2">
       <div class="card">
         <div class="card-h"><h2>渠道结构</h2><div class="meta">近 28 天 · 销量占比</div></div>

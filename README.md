@@ -2,7 +2,9 @@
 
 > **English abstract** — A tool-using agent covering the full creator-marketing loop: creator selection → outreach brief → content rewriting → performance review → live monitoring. Twelve tools, two planners (LLM function-calling / offline rule baseline), and a guard layer that makes the agent **refuse** instead of fabricate when data is missing, budget is short, or candidates are empty. Nine behavioural evals.
 
-一个覆盖「达人筛选 → 合作 brief → 内容复写 → 数据复盘 → 投放监测」的运营 Agent。
+一个覆盖「达人筛选 → 合作 brief → 内容复写 → 数据复盘 → 投放监测 → 线索挖掘」的运营 Agent。
+
+**文档**：[使用指南](docs/USAGE.md)（从零跑通 → 接企微/飞书/第三方数据）　｜　[接库指南](docs/DATASOURCE.md)（接企业数据库）　｜　行为评测 `python eval/run_eval.py`
 
 它最重要的特性不是能做什么，而是**做不了的时候会说做不了**。
 
@@ -68,6 +70,32 @@ parse_product_sales → build_brief → search_candidates → score_candidates �
 
 ---
 
+## 线索流水线（群消息 → 达人名单）
+
+运营在群里丢一个账号，系统自动补全、评分、入库、配话术：
+
+```
+群消息文本
+   ↓ 抽账号（小红书号 / 抖音号 / 主页链接，抽不到就返回空，不猜）
+   ↓ 补画像（星火·飞瓜；未配凭证按账号 ID 稳定生成）
+   ↓ 四维评分 + 分层（代码算，模型不能改数）
+   ↓ 风格拆解（实测型 / 测评对比型 / 生活vlog型 …，各带投放建议）
+   ↓ 写飞书多维表格（未配置则落 CSV，字段一致可直接导入）
+   ↓ S/A 层自动配货盘 + 话术，进「待发队列」
+```
+
+**默认不自动私信达人**——生成待发队列由人确认。原因写在 [使用指南 · 第 9 节](docs/USAGE.md#9-高匹配自动发货盘与话术)：企微没有开放私信陌生人的能力，批量触达既违规又低效。
+
+在界面上粘贴一段群消息即可试，也可以调接口：
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/pipeline \
+  -H "Content-Type: application/json" \
+  -d '{"text":"抖音号：jiuzuo2024 粉丝 12.3w","write":true}'
+```
+
+---
+
 ## Web 工作台（推荐给运营用）
 
 ```bash
@@ -103,6 +131,7 @@ python web/server.py
 | GET | `/api/outreach?ids=` | 生成邀约话术（可直接复制发人） |
 | GET | `/api/report` | 生成日报（Markdown） |
 | POST | `/api/notify` | 推送日报（默认 dry-run，落盘 outbox/） |
+| POST | `/api/pipeline` | 群消息 → 线索 → 评分 → 飞书写入 → 待发队列 |
 | GET | `/api/export` | 导出上次名单 CSV |
 
 ---
@@ -254,6 +283,8 @@ kol-selection-agent/
 │   ├── llm.py              # OpenAI 兼容客户端：重试 / JSON / token 记账
 │   ├── datasource.py       # 数据源抽象：csv / sql / http
 │   ├── notify.py           # 推送：SMTP，未配置则落盘
+│   ├── integrations.py     # 企微 / 星火飞瓜 / 飞书 三个适配器
+│   ├── pipeline.py         # 线索流水线：抽取→画像→评分→写表→话术
 │   ├── core.py             # 区间解析、商品简报、评分、预算分配
 │   ├── tools_extra.py      # 合作 brief、谈判、复写、复盘、监测
 │   ├── registry.py         # 14 个工具的 schema 与 handler
@@ -264,7 +295,9 @@ kol-selection-agent/
 │   └── static/             # index.html / style.css / app.js
 ├── sql/                    # 企业库对接：mapping.json / schema_enterprise.sql
 ├── scripts/                # build_sqlite_demo.py / daily_monitor.py
-├── docs/DATASOURCE.md      # 接库指南（三种方式 + 数据契约）
+├── docs/
+│   ├── USAGE.md            # 使用指南（从零跑通 → 接企微/飞书）
+│   └── DATASOURCE.md       # 接库指南（三种方式 + 数据契约）
 ├── data/                   # 全部合成：销售分布 / 候选池 / 投放数据 / 待复写样本
 ├── eval/                   # 9 条行为评测
 └── logs/                   # token 记账（gitignore）
@@ -283,6 +316,8 @@ kol-selection-agent/
 5. **监测阈值未经真实数据校准**：50% / 30% 这些数字来自经验，换品类需重标。
 6. **未接平台 API**：达人数据与投放数据需由调度或人工导入（数据源层已留出 HTTP 接口）。
 7. **数据源整源切换**：目前 csv/sql/http 三者互斥，不能部分数据集走库、部分走本地。
+8. **企微读聊天记录需企业侧配合**：群机器人只能发不能收；读消息需自建应用回调（要公网地址）或会话存档（要服务商 SDK）。所以默认提供粘贴导入把链路跑通。
+9. **星火/飞瓜默认走 mock**：两家无免费公开 API，凭证未配时按账号 ID 稳定生成假数据，字段结构与真实接口对齐，便于先验证链路。
 
 ---
 
